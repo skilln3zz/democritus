@@ -1,13 +1,13 @@
-// Left-rail navigation between pages. The chat page is the sidebar + #main;
-// every other page is a <section id="page-NAME">.
+// Navigation between pages. Every page is a <section id="page-NAME">; any
+// button with class rail-btn and data-page="NAME" opens that page.
 import { icons } from './icons';
 import { $ } from './ui';
 
-const onShowHandlers = new Map<string, () => void>();
+const onShowHandlers = new Map<string, (() => void)[]>();
 let current = 'chat';
 
 export function onShow(page: string, fn: () => void) {
-  onShowHandlers.set(page, fn);
+  onShowHandlers.set(page, [...(onShowHandlers.get(page) ?? []), fn]);
 }
 
 export function currentPage(): string {
@@ -17,11 +17,14 @@ export function currentPage(): string {
 export function showPage(name: string) {
   current = name;
   $('#app').dataset.page = name;
-  document.querySelectorAll<HTMLElement>('.rail-btn[data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
+  document.querySelectorAll<HTMLElement>('.rail-btn[data-page]').forEach((b) => {
+    const on = b.dataset.page === name;
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
   document.querySelectorAll<HTMLElement>('section.page').forEach((s) => (s.hidden = s.id !== `page-${name}`));
-  $('#sidebar').hidden = name !== 'chat';
-  $('#main').hidden = name !== 'chat';
-  onShowHandlers.get(name)?.();
+  for (const fn of onShowHandlers.get(name) ?? []) fn();
 }
 
 export function initRail() {

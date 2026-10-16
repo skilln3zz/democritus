@@ -5,7 +5,7 @@ import { api, type MemoryFile, type MemoryOverview, type Proposal } from './api'
 import { diffLines } from './diff';
 import { onOperatorChange } from './operatorpage';
 import { currentPage, onShow } from './pages';
-import { $, askConfirm, errorText, escapeText, relativeTime, toast } from './ui';
+import { $, askConfirm, errorText, escapeText, formatBytes, relativeTime, toast } from './ui';
 
 let overview: MemoryOverview | null = null;
 let currentPath = '';
@@ -36,7 +36,11 @@ async function refresh() {
   }
   const o = overview;
   $('#mem-path').textContent = o.memoryDir;
+  const bytes = o.files.reduce((n, f) => n + f.size, 0);
+  $('#mem-count').textContent = `${o.files.length} file${o.files.length === 1 ? '' : 's'} · ${formatBytes(bytes)}`;
   $<HTMLInputElement>('#mem-pause').checked = o.paused;
+  $<HTMLInputElement>('#mem-auto').checked = o.autoApply;
+  $<HTMLInputElement>('#mem-auto').disabled = o.lockdown;
   const bits = [];
   if (o.lockdown) bits.push('Lockdown: automatic memory writing paused');
   else if (o.paused) bits.push('Memory paused');
@@ -48,6 +52,22 @@ async function refresh() {
   if (!$<HTMLInputElement>('#mem-search').value.trim()) renderFiles(o.files);
   if (!currentPath && o.files.length) await openFile(o.files.find((f) => f.path === 'current_state.md')?.path ?? o.files[0].path);
   await renderProposals();
+  void renderRecent();
+}
+
+/** The latest memory events from the activity log. */
+async function renderRecent() {
+  const box = $('#mem-recent');
+  const entries = await api.readActivity(6, 'memory', '').catch(() => []);
+  box.innerHTML = entries.length
+    ? entries
+        .map((e) => {
+          const d = e.detail as Record<string, unknown> | null;
+          const file = d && typeof d === 'object' ? (d.path ?? d.file ?? (Array.isArray(d.files) ? d.files.join(', ') : '')) : '';
+          return `<div class="recent-row"><span>${escapeText(String(file ? `${file} · ` : ''))}${escapeText(e.action)}</span><span class="mono muted">${escapeText(e.time.slice(-8, -3))}</span></div>`;
+        })
+        .join('')
+    : '<div class="small muted">No memory changes yet.</div>';
 }
 
 function renderSemantic(o: MemoryOverview) {
@@ -63,11 +83,11 @@ function renderSemantic(o: MemoryOverview) {
 }
 
 function fileRow(f: MemoryFile): string {
+  const name = f.path.includes('/') ? f.path.slice(f.path.indexOf('/') + 1) : f.path;
   return (
-    `<button type="button" class="mem-file${f.path === currentPath ? ' active' : ''}" data-path="${escapeText(f.path)}">` +
-    `<span class="mem-file-name">${escapeText(f.path)}</span>` +
-    `<span class="muted small">${escapeText(f.description || f.title)}</span>` +
-    `<span class="muted small">${relativeTime(f.modifiedMs)}</span></button>`
+    `<button type="button" class="mem-file${f.path.includes('/') ? ' nested' : ''}${f.path === currentPath ? ' active' : ''}" data-path="${escapeText(f.path)}" title="${escapeText(f.description || f.title)}">` +
+    `<span class="mem-file-name">${escapeText(name)}</span>` +
+    `<span class="mem-file-date">${relativeTime(f.modifiedMs)}</span></button>`
   );
 }
 
@@ -79,7 +99,7 @@ function renderFiles(files: MemoryFile[]) {
   ];
   $('#mem-files').innerHTML = groups
     .filter(([, list]) => list.length)
-    .map(([name, list]) => `<div class="mem-group">${name}</div>${list.map(fileRow).join('')}`)
+    .map(([name, list]) => (name === 'Core' ? '' : `<div class="mem-group">${name.toLowerCase()}/ · ${list.length}</div>`) + list.map(fileRow).join(''))
     .join('');
 }
 
@@ -115,7 +135,7 @@ async function openFile(path: string) {
   currentPath = path;
   const f = overview?.files.find((x) => x.path === path);
   $('#mem-file-title').textContent = f?.title ?? path;
-  $('#mem-file-path').textContent = path;
+  $('#mem-file-path').textContent = path.toUpperCase();
   const text = $<HTMLTextAreaElement>('#mem-text');
   text.value = loadedText;
   text.readOnly = path === 'index.md';
@@ -193,24 +213,21 @@ async function proposalHtml(p: Proposal): Promise<string> {
     : '';
   const diffs = previews.map((f) => `<div class="diff-file"><div class="diff-name">${escapeText(f.path)}</div>${diffHtml(f.before, f.after)}</div>`).join('');
   return (
-    `<div class="proposal" data-id="${p.id}"><div class="proposal-head"><div><strong>Proposed by ${escapeText(p.model)}</strong> ` +
-    `<span class="muted small">from “${escapeText(p.conversationTitle || 'a conversation')}” · ${relativeTime(p.createdAt)}</span></div>` +
-    `<div class="spacer"></div><button type="button" class="btn small" data-reject="${p.id}">Reject</button>` +
-    `<button type="button" class="btn small primary" data-apply="${p.id}">Apply selected</button></div>` +
-    `<div class="op-list">${ops}</div>${rejected}<div class="diffs">${diffs}</div></div>`
+    `<div class="proposal" data-id="${p.id}"><div class="proposal-head small muted">` +
+    `From “${escapeText(p.conversationTitle || 'a conversation')}”, written by ${escapeText(p.model)} · ${relativeTime(p.createdAt)}` +
+    `</div><div class="op-list">${ops}</div>${rejected}<div class="diffs">${diffs}</div>` +
+    `<div class="proposal-actions"><button type="button" class="btn hex accent" data-apply="${p.id}">Apply selected</button>` +
+    `<button type="button" class="btn" data-reject="${p.id}">Reject</button></div></div>`
   );
 }
 
 async function renderProposals() {
   const box = $('#mem-proposals');
   const list = await api.memoryProposals('pending').catch(() => []);
-  if (!list.length) {
-    box.hidden = true;
-    box.innerHTML = '';
-    return;
-  }
-  box.innerHTML = `<div class="mem-group">Memory updates waiting for your review (${list.length})</div>` + (await Promise.all(list.map(proposalHtml))).join('');
-  box.hidden = false;
+  const head = `<div class="caps muted section-head"><span class="ink">Proposed update${list.length === 1 ? '' : 's'}</span><span>${list.length ? `${list.length} waiting` : 'none'}</span></div>`;
+  box.innerHTML = list.length
+    ? head + (await Promise.all(list.map(proposalHtml))).join('')
+    : head + '<p class="small muted">Nothing to review. After each chat, Democritus may propose changes to these files; they wait here for your OK.</p>';
 }
 
 export function initMemoryPage() {
@@ -264,6 +281,13 @@ export function initMemoryPage() {
     toast(on ? 'Memory paused' : 'Memory resumed');
     void refresh();
   });
+  $('#mem-auto').addEventListener('change', async (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    const op = await api.getOperator();
+    await api.saveOperator({ ...op, autoApplyMemory: on }).catch((err) => toast(errorText(err), 'error'));
+    toast(on ? 'Memory updates now apply automatically' : 'You review each memory update first');
+    void refresh();
+  });
   $('#mem-semantic').addEventListener('click', async (e) => {
     if ((e.target as HTMLElement).id !== 'mem-install') return;
     (e.target as HTMLButtonElement).disabled = true;
@@ -297,19 +321,23 @@ export function initMemoryPage() {
     await refresh();
     if (path) await openFile(path);
   });
-  $('#mem-reset').addEventListener('click', async () => {
-    const ok = await askConfirm(
-      'Reset everything learned? First the whole memory folder is backed up. Then all memory files go back to their starting templates, and the search index, pending updates and project links are cleared. Conversations and settings are kept.',
-      'Back up and reset',
-    );
-    if (!ok) return;
-    try {
-      const backup = await api.resetLearning();
-      toast(`Reset done. Backup: ${backup}`, 'info', 8000);
-      currentPath = '';
-      await refresh();
-    } catch (e) {
-      toast(errorText(e), 'error');
-    }
-  });
+  $('#mem-reset').addEventListener('click', () => void resetEverything());
+  $('#op-reset').addEventListener('click', () => void resetEverything());
+}
+
+/** "Reset everything learned", from the Memory page or Settings & safety. */
+async function resetEverything() {
+  const ok = await askConfirm(
+    'Reset everything learned? First the whole memory folder is backed up. Then all memory files go back to their starting templates, and the search index, pending updates and project links are cleared. Conversations and settings are kept.',
+    'Back up and reset',
+  );
+  if (!ok) return;
+  try {
+    const backup = await api.resetLearning();
+    toast(`Reset done. Backup: ${backup}`, 'info', 8000);
+    currentPath = '';
+    if (currentPage() === 'memory') await refresh();
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
 }

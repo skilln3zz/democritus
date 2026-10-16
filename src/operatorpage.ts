@@ -2,7 +2,7 @@
 // allowlist and the two-step approval flow for downloads.
 import { api, type Approval, type OperatorSettings } from './api';
 import { icons } from './icons';
-import { onShow } from './pages';
+import { currentPage, onShow } from './pages';
 import { $, askConfirm, errorText, escapeText, formatBytes, toast } from './ui';
 
 let operator: OperatorSettings | null = null;
@@ -60,15 +60,20 @@ const TOGGLES: Toggle[] = [
 
 function renderToggles() {
   if (!operator) return;
-  $('#op-toggles').innerHTML = TOGGLES.map((t) => {
+  $('#op-toggles').innerHTML = TOGGLES.map((t, i) => {
     const on = Boolean(operator![t.key]);
+    const id = `op-t-${t.key}`;
     return (
-      `<label class="toggle-row${t.disabled ? ' disabled' : ''}"><div><div class="toggle-label">${escapeText(t.label)}</div>` +
-      `<div class="muted small">${escapeText(t.desc)}${t.disabled ? `<br><em>${escapeText(t.disabled)}</em>` : ''}</div></div>` +
-      `<input type="checkbox" class="switch" data-key="${t.key}" ${on ? 'checked' : ''} ${t.disabled ? 'disabled' : ''} /></label>`
+      `<div class="toggle-row${t.disabled ? ' disabled' : ''}"><span class="mono muted toggle-num">${String(i + 1).padStart(2, '0')}</span>` +
+      `<label class="toggle-text" for="${id}"><span class="toggle-label">${escapeText(t.label)}</span>` +
+      `<span class="muted small">${escapeText(t.desc)}${t.disabled ? `<br><em>${escapeText(t.disabled)}</em>` : ''}</span></label>` +
+      `<input id="${id}" type="checkbox" role="switch" class="switch" data-key="${t.key}" ${on ? 'checked' : ''} ${t.disabled ? 'disabled' : ''} /></div>`
     );
   }).join('');
   $<HTMLTextAreaElement>('#op-allowlist').value = operator.downloadAllowlist.join('\n');
+  $('#op-allow-chips').innerHTML =
+    operator.downloadAllowlist.map((u) => `<span class="chip-ink mono">${escapeText(u.replace(/^https:\/\//, '').replace(/\/$/, ''))}</span>`).join('') +
+    '<span class="chip-outline mono">.gguf · .safetensors</span><span class="chip-refused mono">.bin .pt .pkl</span>';
   const canDownload = operator.allowDownloads && !operator.lockdown;
   $<HTMLButtonElement>('#op-download-btn').disabled = !canDownload;
   $<HTMLInputElement>('#op-download-url').disabled = !canDownload;
@@ -82,10 +87,38 @@ function renderToggles() {
 function renderLockdownButton(o: OperatorSettings) {
   const btn = $<HTMLButtonElement>('#lockdown-btn');
   btn.classList.toggle('on', o.lockdown);
+  btn.setAttribute('aria-pressed', String(o.lockdown));
   btn.querySelector('.rail-icon')!.innerHTML = o.lockdown ? icons.lock : icons.unlock;
   btn.querySelector('.lockdown-label')!.textContent = o.lockdown ? 'Locked' : 'Lockdown';
   btn.title = o.lockdown ? 'Lockdown is ON. Click to turn it off.' : 'Lockdown: block all internet access and pause learning';
   $('#lockdown-banner').hidden = !o.lockdown;
+  // The Settings & safety band inverts while locked.
+  $('#op-band').classList.toggle('locked', o.lockdown);
+  $('#op-band-title').textContent = o.lockdown ? 'LOCKED' : 'LOCKDOWN';
+  $('#op-band-text').textContent = o.lockdown
+    ? 'Internet blocked, learning paused. Chat still works.'
+    : 'One switch blocks all internet access and pauses learning.';
+  const big = $<HTMLButtonElement>('#op-lock-btn');
+  big.textContent = o.lockdown ? 'LIFT LOCKDOWN' : 'LOCK DOWN';
+  big.setAttribute('aria-pressed', String(o.lockdown));
+}
+
+/** The newest activity-log lines, beside the permissions. */
+async function renderLogPreview() {
+  const box = $('#op-log-preview');
+  try {
+    const entries = await api.readActivity(8, '', '');
+    box.innerHTML = entries.length
+      ? entries
+          .map((e) => {
+            const alert = e.kind === 'security' && /refus|block|denied|fail|lockdown on/i.test(e.action);
+            return `<li class="${alert ? 'alert' : ''}"><span class="mono">${escapeText(e.time.slice(-8, -3) || e.time)}</span><span>${escapeText(e.action)}</span></li>`;
+          })
+          .join('')
+      : '<li class="muted">Nothing logged yet.</li>';
+  } catch (e) {
+    box.innerHTML = `<li class="muted">${escapeText(errorText(e))}</li>`;
+  }
 }
 
 export async function toggleLockdown() {
@@ -166,10 +199,17 @@ async function startDownload() {
 export function initOperatorPage() {
   onOperatorChange(renderToggles);
   onOperatorChange(renderLockdownButton);
+  onOperatorChange(() => {
+    if (currentPage() === 'operator') void renderLogPreview();
+  });
   onShow('operator', () => {
     void loadOperator();
+    void renderLogPreview();
     void api.appPaths().then((p) => ($('#op-downloads-path').textContent = p.downloads));
   });
+  window.setInterval(() => {
+    if (currentPage() === 'operator' && !document.hidden) void renderLogPreview();
+  }, 5000);
   $('#op-toggles').addEventListener('change', (e) => {
     const input = e.target as HTMLInputElement;
     const key = input.dataset.key as keyof OperatorSettings | undefined;
@@ -187,4 +227,5 @@ export function initOperatorPage() {
   });
   $('#op-download-btn').addEventListener('click', () => void startDownload());
   $('#lockdown-btn').addEventListener('click', () => void toggleLockdown());
+  $('#op-lock-btn').addEventListener('click', () => void toggleLockdown());
 }

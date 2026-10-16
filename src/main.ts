@@ -1,3 +1,11 @@
+// Fonts are bundled from npm (SIL Open Font License); nothing loads from the web.
+import '@fontsource/italiana/400.css';
+import '@fontsource/manrope/400.css';
+import '@fontsource/manrope/500.css';
+import '@fontsource/manrope/600.css';
+import '@fontsource/manrope/700.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 import {
   api,
@@ -12,12 +20,15 @@ import {
   type StreamEvent,
 } from './api';
 import { renderMarkdown } from './markdown';
-import { icons, logo } from './icons';
+import { icons, logo, logoUrl } from './icons';
 import { initLogPage } from './logpage';
 import { listen } from '@tauri-apps/api/event';
-import { initMemoryPage } from './memorypage';
+import { initMemoryPage, onPendingChange } from './memorypage';
 import { initOperatorPage, loadOperator } from './operatorpage';
-import { initRail, showPage } from './pages';
+import { fillOrnaments, sparkle, starburst } from './ornaments';
+import { currentPage, initRail, showPage } from './pages';
+import { initSecurityCheck } from './securitypage';
+import { applyTheme, initThemeSwitch, type ThemePref } from './theme';
 import { $, askConfirm, askText, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
 
 const isMac = navigator.userAgent.includes('Mac');
@@ -27,7 +38,7 @@ const MAX_FILE_BYTES = 1_000_000;
 const els = {
   newChat: $<HTMLButtonElement>('#new-chat'),
   search: $<HTMLInputElement>('#search'),
-  convList: $<HTMLUListElement>('#conversation-list'),
+  convList: $('#conversation-list'),
   sidebarEmpty: $('#sidebar-empty'),
   modelSelect: $<HTMLSelectElement>('#model-select'),
   refreshModels: $<HTMLButtonElement>('#refresh-models'),
@@ -65,7 +76,22 @@ const els = {
   loadedBtn: $<HTMLButtonElement>('#loaded-btn'),
   loadedPanel: $('#loaded-panel'),
   toasts: $('#toasts'),
+  convNumber: $('#conv-number'),
+  convCaps: $('#conv-caps'),
+  convTitleCaps: $('#conv-title-caps'),
+  brainSpeed: $('#brain-speed'),
+  contState: $('#cont-state'),
+  contNext: $('#cont-next'),
+  contStepsWrap: $('#cont-steps-wrap'),
+  contStepsHead: $('#cont-steps-head'),
+  contSteps: $('#cont-steps'),
+  contRecalled: $('#cont-recalled'),
+  attach: $<HTMLButtonElement>('#attach'),
+  attachInput: $<HTMLInputElement>('#attach-input'),
 };
+
+/** Memory updates waiting for review (shown as a chip on the latest reply). */
+let pendingUpdates = 0;
 
 interface Attachment {
   name: string;
@@ -155,7 +181,7 @@ function applyStatus(s: ServerStatus) {
   state.server = s;
   els.status.dataset.state = s.state;
   els.statusLabel.textContent =
-    s.state === 'connected' ? 'Connected' : s.state === 'starting' ? 'Starting server…' : 'Disconnected';
+    s.state === 'connected' ? 'Offline · localhost' : s.state === 'starting' ? 'Starting server…' : 'Server disconnected';
   els.status.title =
     s.state === 'connected'
       ? `Model server at ${s.baseUrl}${s.startedByApp ? ' (started by this app)' : ''}`
@@ -188,37 +214,47 @@ async function refreshLoaded() {
 }
 
 function renderLoaded() {
-  const n = state.loaded.length;
-  els.loadedBtn.hidden = state.server?.state !== 'connected';
-  const label = n === 0 ? 'No model loaded' : n === 1 ? state.loaded[0].name : `${n} models loaded`;
-  els.loadedBtn.innerHTML = `${icons.chip}<span>${escapeText(label)}</span>`;
-  els.loadedBtn.dataset.count = String(n);
-  if (!els.loadedPanel.hidden) void renderLoadedPanel();
+  els.loadedBtn.dataset.count = String(state.loaded.length);
+  void renderLoadedPanel();
 }
 
-async function renderLoadedPanel() {
-  const rows = state.loaded.map((m) => {
-    const gpu = m.sizeBytes ? Math.round((m.vramBytes / m.sizeBytes) * 100) : 0;
-    const where = gpu >= 100 ? '100% GPU' : gpu === 0 ? 'CPU only' : `${gpu}% GPU / ${100 - gpu}% CPU`;
-    return (
-      `<div class="loaded-row"><div><div class="loaded-name">${escapeText(m.name)}</div>` +
-      `<div class="muted small">${formatMem(m.sizeBytes)} · ${where}${m.contextLength ? ` · ${m.contextLength.toLocaleString()} ctx` : ''}</div></div>` +
-      `<button type="button" class="btn small unload-btn" data-model="${escapeText(m.name)}">Unload</button></div>`
-    );
-  });
-  let mem = '';
+// Free RAM/VRAM runs nvidia-smi, so the figure is reused for half a minute
+// unless the operator asks for a fresh look.
+let memCache: { at: number; text: string } | null = null;
+
+async function memoryLine(fresh: boolean): Promise<string> {
+  if (!fresh && memCache && Date.now() - memCache.at < 30_000) return memCache.text;
   try {
     const info = await api.memoryInfo();
-    mem =
+    const text =
       `RAM ${formatMem(info.freeRam)} free of ${formatMem(info.totalRam)}` +
       (info.totalVram != null ? ` · VRAM ${formatMem(info.freeVram ?? 0)} free of ${formatMem(info.totalVram)}` : '');
+    memCache = { at: Date.now(), text };
+    return text;
   } catch {
-    // memory figures are optional
+    return ''; // memory figures are optional
   }
+}
+
+async function renderLoadedPanel(fresh = false) {
+  const connected = state.server?.state === 'connected';
+  const helper = state.settings?.memoryHelperModel;
+  const rows = state.loaded.map((m) => {
+    const gpu = m.sizeBytes ? Math.min(100, Math.round((m.vramBytes / m.sizeBytes) * 100)) : 0;
+    const where = gpu >= 100 ? '100% GPU' : gpu === 0 ? 'CPU only' : `${gpu}% GPU / ${100 - gpu}% CPU`;
+    const role = m.name === helper ? ' · helper' : '';
+    return (
+      `<div class="loaded-row"><div class="loaded-top"><span class="loaded-name mono">${escapeText(m.name)}</span><span class="mono">${formatMem(m.sizeBytes)}</span></div>` +
+      `<div class="mem-bar" role="img" aria-label="${where}"><span class="gpu" style="width:${gpu}%"></span><span class="ram" style="width:${100 - gpu}%"></span></div>` +
+      `<div class="caps muted loaded-split"><span>GPU ${formatMem(m.vramBytes)}</span><span>RAM ${formatMem(Math.max(0, m.sizeBytes - m.vramBytes))}</span></div>` +
+      `<div class="loaded-bottom"><span class="muted small">${escapeText(where)}${m.contextLength ? ` · ${m.contextLength.toLocaleString()} ctx` : ''}${role}</span>` +
+      `<button type="button" class="btn small unload-btn" data-model="${escapeText(m.name)}">Unload</button></div></div>`
+    );
+  });
+  const mem = connected ? await memoryLine(fresh) : '';
+  const empty = connected ? 'None. A model loads when you send a message.' : 'The model server is not connected.';
   els.loadedPanel.innerHTML =
-    `<div class="popover-title">Models in memory</div>` +
-    (rows.length ? rows.join('') : '<div class="muted small">None. A model loads when you send a message.</div>') +
-    (mem ? `<div class="popover-foot muted small">${mem}</div>` : '');
+    (rows.length ? rows.join('') : `<div class="muted small">${empty}</div>`) + (mem ? `<div class="popover-foot muted small">${mem}</div>` : '');
 }
 
 async function unloadModel(model: string, quiet = false) {
@@ -331,6 +367,7 @@ function renderProjects() {
   const conv = state.conversations.find((c) => c.id === state.currentId);
   const want = state.currentId !== null ? (conv?.project ?? '') : (state.settings?.activeProject ?? '');
   sel.value = projects.some((p) => p.slug === want) ? want : '';
+  if (state.conversations.some((c) => c.project)) renderConversations();
 }
 
 async function chooseProject() {
@@ -380,24 +417,60 @@ async function refreshConversations() {
   renderConversations();
 }
 
+/** Conversation numbers are their ids, shown as "014". */
+const convNumber = (id: number) => String(id).padStart(3, '0');
+
+function convItem(c: Conversation): HTMLElement {
+  const li = document.createElement('li');
+  li.className = 'conv-item';
+  li.dataset.id = String(c.id);
+  li.classList.toggle('active', c.id === state.currentId);
+  li.classList.toggle('busy', state.generation?.conversationId === c.id);
+  li.innerHTML =
+    `<button type="button" class="conv-open"><span class="conv-num mono"></span><span class="conv-text"><span class="conv-title"></span><span class="conv-date"></span></span></button>` +
+    `<span class="conv-actions"><button type="button" class="icon-btn conv-rename" title="Rename" aria-label="Rename">${icons.edit}</button>` +
+    `<button type="button" class="icon-btn conv-delete" title="Delete" aria-label="Delete">${icons.trash}</button></span>`;
+  li.querySelector('.conv-num')!.textContent = convNumber(c.id);
+  li.querySelector('.conv-title')!.textContent = c.title;
+  li.querySelector('.conv-date')!.textContent = relativeTime(c.updatedAt);
+  if (c.id === state.currentId) li.querySelector('.conv-open')!.setAttribute('aria-current', 'true');
+  return li;
+}
+
+/** Groups conversations by project (newest group first); the rest are "loose pages". */
 function renderConversations() {
-  const items = state.conversations.map((c) => {
-    const li = document.createElement('li');
-    li.className = 'conv-item';
-    li.dataset.id = String(c.id);
-    li.classList.toggle('active', c.id === state.currentId);
-    li.classList.toggle('busy', state.generation?.conversationId === c.id);
-    li.innerHTML =
-      `<button type="button" class="conv-open"><span class="conv-title"></span><span class="conv-date"></span></button>` +
-      `<span class="conv-actions"><button type="button" class="icon-btn conv-rename" title="Rename">${icons.edit}</button>` +
-      `<button type="button" class="icon-btn conv-delete" title="Delete">${icons.trash}</button></span>`;
-    li.querySelector('.conv-title')!.textContent = c.title;
-    li.querySelector('.conv-date')!.textContent = relativeTime(c.updatedAt);
-    return li;
+  const groups = new Map<string, Conversation[]>();
+  for (const c of state.conversations) {
+    const key = c.project || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(c);
+  }
+  const loose = groups.get('');
+  groups.delete('');
+  if (loose) groups.set('', loose);
+  const sections = [...groups].map(([slug, list]) => {
+    const box = document.createElement('div');
+    box.className = 'conv-group';
+    const name = slug ? `Project · ${projects.find((p) => p.slug === slug)?.title ?? slug}` : groups.size > 1 ? 'Loose pages' : 'Conversations';
+    box.innerHTML = `<div class="caps muted group-head"><span class="group-name"></span><span>${String(list.length).padStart(2, '0')}</span></div><ul class="conv-items"></ul>`;
+    box.querySelector('.group-name')!.textContent = name;
+    box.querySelector('ul')!.append(...list.map(convItem));
+    return box;
   });
-  els.convList.replaceChildren(...items);
-  els.sidebarEmpty.hidden = items.length > 0;
+  els.convList.replaceChildren(...sections);
+  els.sidebarEmpty.hidden = state.conversations.length > 0;
   els.sidebarEmpty.textContent = state.query ? 'No chats match your search' : 'No conversations yet';
+  renderHeader();
+}
+
+/** Conversation number and title in the top band; speed of the last reply. */
+function renderHeader() {
+  const conv = state.conversations.find((c) => c.id === state.currentId);
+  els.convNumber.textContent = conv ? `N° ${convNumber(conv.id)}` : 'N° —';
+  els.convCaps.textContent = conv ? (projects.find((p) => p.slug === conv.project)?.title ?? 'Loose page') : 'New conversation';
+  els.convTitleCaps.textContent = conv ? `“${conv.title}”` : '“A private assistant on this computer”';
+  const last = [...state.messages].reverse().find((m) => m.role === 'assistant' && m.stats?.tokensPerSecond);
+  els.brainSpeed.textContent = last?.stats?.tokensPerSecond ? `${last.stats.tokensPerSecond} tok/s` : '';
 }
 
 function startRename(li: HTMLElement, id: number) {
@@ -464,6 +537,7 @@ function newChat() {
   renderMessages();
   renderConversations();
   selectModel(state.settings?.defaultModel);
+  void refreshContinuity();
   els.input.focus();
 }
 
@@ -480,14 +554,59 @@ async function openConversation(id: number) {
   renderConversations();
   renderProjects();
   renderMessages();
+  void refreshContinuity();
   els.input.focus();
+}
+
+// ---------- continuity panel ----------
+
+/** Current state (from current_state.md), project steps and what the last reply recalled. */
+async function refreshContinuity() {
+  const t = await api.lastTime().catch(() => null);
+  els.contState.textContent = t?.lastTask || (t?.conversationTitle ? `“${t.conversationTitle}”` : 'A fresh start');
+  els.contNext.hidden = !t?.nextStep;
+  els.contNext.textContent = t?.nextStep ? `Next: ${t.nextStep}` : '';
+  await renderSteps();
+  renderRecalled();
+}
+
+/** Task-list items ("- [x] …") from the active project's memory file. */
+async function renderSteps() {
+  const conv = state.conversations.find((c) => c.id === state.currentId);
+  const slug = state.currentId !== null ? (conv?.project ?? '') : (state.settings?.activeProject ?? '');
+  const text = slug ? await api.memoryRead(`projects/${slug}.md`).catch(() => '') : '';
+  const steps = [...text.matchAll(/^\s*[-*+]\s+\[( |x|X)\]\s+(.+)$/gm)].map((m) => ({ done: m[1] !== ' ', text: m[2].trim() }));
+  els.contStepsWrap.hidden = steps.length === 0;
+  if (!steps.length) return;
+  const current = steps.findIndex((s) => !s.done);
+  els.contStepsHead.textContent = current === -1 ? `Project · all ${steps.length} done` : `Project · ${current + 1} of ${steps.length}`;
+  els.contSteps.innerHTML = steps
+    .map(
+      (s, i) =>
+        `<li class="${s.done ? 'done' : i === current ? 'current' : ''}"><span class="mono">${String(i + 1).padStart(2, '0')}</span>` +
+        `<span>${escapeText(s.text)}${i === current ? ` ${starburst(11, 'accent')}` : ''}</span></li>`,
+    )
+    .join('');
+}
+
+function renderRecalled() {
+  const last = [...state.messages].reverse().find((m) => m.role === 'assistant' && m.stats?.context);
+  const c = last?.stats?.context;
+  if (!c) {
+    els.contRecalled.textContent = 'Recalled · —';
+    els.contRecalled.removeAttribute('title');
+    return;
+  }
+  const n = c.memoryFiles.length;
+  els.contRecalled.textContent = `Recalled · ${n} file${n === 1 ? '' : 's'}${c.searchHits ? ` · ${c.searchHits} note${c.searchHits === 1 ? '' : 's'}` : ''}`;
+  els.contRecalled.title = handoffText(c);
 }
 
 // ---------- messages ----------
 
 function emptyState(): HTMLElement {
   const div = document.createElement('div');
-  div.className = 'empty';
+  div.className = 'empty paper-card';
   div.innerHTML =
     `${logo}<h1>Democritus</h1>` +
     `<p class="muted">Your private assistant. Its brain is the local Qwen model you pick; its identity and memory stay on this computer.</p>` +
@@ -533,7 +652,11 @@ function switchEl(from: string, m: Message): HTMLElement {
   const el = document.createElement('div');
   el.className = 'brain-switch';
   el.dataset.for = String(m.id);
-  el.innerHTML = `<div class="brain-switch-line"><span>Brain switched to <strong>${escapeText(m.model)}</strong> <span class="muted">(was ${escapeText(from)})</span></span></div><div class="handoff-note muted small"></div>`;
+  el.setAttribute('role', 'separator');
+  el.innerHTML =
+    `<div class="brain-switch-line"><span class="rule"></span>${sparkle('accent')}` +
+    `<span>Brain switched to <strong>${escapeText(m.model)}</strong> <span class="was">(was ${escapeText(from)})</span> · handoff passed</span>` +
+    `${sparkle('accent')}<span class="rule"></span></div><div class="handoff-note small"></div>`;
   el.querySelector('.handoff-note')!.textContent = handoffText(m.stats?.context);
   return el;
 }
@@ -565,6 +688,8 @@ function renderMessages() {
     items.push(el);
   });
   els.messages.replaceChildren(...items);
+  renderReviewChip();
+  renderHeader();
   scrollToBottom();
 }
 
@@ -573,7 +698,7 @@ function messageEl(m: Message): HTMLElement {
   el.className = `message ${m.role}`;
   el.innerHTML =
     m.role === 'assistant'
-      ? `<div class="meta"><span class="who"></span></div>` +
+      ? `<div class="meta caps muted">${starburst(12, 'accent')}<span class="ink">Democritus</span><span class="who"></span><span class="num"></span></div>` +
         `<details class="thinking" hidden><summary><span class="thinking-label"></span></summary><div class="thinking-body md"></div></details>` +
         `<div class="body md"></div><div class="error-box" hidden></div><div class="footer"></div>`
       : `<div class="bubble"><div class="body md"></div></div>`;
@@ -591,7 +716,8 @@ function updateMessageEl(el: HTMLElement, m: Message) {
     return;
   }
 
-  el.querySelector('.who')!.textContent = m.model || 'Assistant';
+  el.querySelector('.who')!.textContent = `· ${m.model || 'assistant'}`;
+  el.querySelector('.num')!.textContent = m.id > 0 ? `N° ${String(m.id).padStart(3, '0')}` : '';
   const streaming = m.status === 'streaming';
   const content = m.content.replace(/^\s+/, '');
   const reasoning = m.reasoning.trim();
@@ -640,6 +766,21 @@ function footerHtml(m: Message): string {
   }
   if (m.content.trim()) bits.push(`<button type="button" class="link-btn copy-message">${icons.copy}Copy</button>`);
   return bits.join('<span class="sep">·</span>');
+}
+
+/** "N memory updates to review" on the latest finished reply. */
+function renderReviewChip() {
+  document.querySelectorAll('#messages .review-chip').forEach((c) => c.remove());
+  if (!pendingUpdates) return;
+  const replies = els.messages.querySelectorAll<HTMLElement>('.message.assistant:not([data-status="streaming"]) .footer');
+  const footer = replies[replies.length - 1];
+  if (!footer) return;
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'review-chip';
+  chip.textContent = `${pendingUpdates} memory update${pendingUpdates === 1 ? '' : 's'} to review`;
+  chip.addEventListener('click', () => showPage('memory'));
+  footer.append(chip);
 }
 
 function kTokens(n: number): string {
@@ -780,6 +921,7 @@ async function send() {
     if (stale && state.currentId === conversationId) await openConversation(conversationId);
     await refreshConversations();
     void refreshLoaded();
+    void refreshContinuity();
   }
 }
 
@@ -830,6 +972,8 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
         updateMessageEl(g.el, m);
         if (stick) scrollToBottom();
       }
+      renderReviewChip();
+      renderHeader();
       g.markFinished();
       break;
     }
@@ -980,6 +1124,17 @@ async function saveSettings(e: SubmitEvent) {
   }
 }
 
+/** Saves the theme choice in the app's settings (the cache in localStorage follows). */
+async function chooseTheme(p: ThemePref) {
+  applyTheme(p);
+  if (!state.settings) return;
+  try {
+    state.settings = await api.saveSettings({ ...state.settings, theme: p });
+  } catch (e) {
+    toast(`Couldn't save the theme: ${errorText(e)}`, 'error');
+  }
+}
+
 // ---------- wiring ----------
 
 function autoGrow() {
@@ -1001,23 +1156,26 @@ els.status.addEventListener('click', () => {
   else void pollStatus();
 });
 
-els.loadedBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  els.loadedPanel.hidden = !els.loadedPanel.hidden;
-  if (!els.loadedPanel.hidden) {
-    els.loadedPanel.innerHTML = '<div class="muted small">Checking…</div>';
-    void refreshLoaded(); // renders the panel once with fresh data
+els.loadedBtn.addEventListener('click', async () => {
+  try {
+    state.loaded = state.server?.state === 'connected' ? await api.loadedModels() : [];
+  } catch {
+    state.loaded = [];
   }
+  await renderLoadedPanel(true);
 });
 els.loadedPanel.addEventListener('click', (e) => {
-  e.stopPropagation();
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.unload-btn');
   if (btn?.dataset.model) {
     btn.disabled = true;
     void unloadModel(btn.dataset.model);
   }
 });
-document.addEventListener('click', () => (els.loadedPanel.hidden = true));
+els.attach.addEventListener('click', () => els.attachInput.click());
+els.attachInput.addEventListener('change', async () => {
+  for (const file of Array.from(els.attachInput.files ?? [])) await addAttachment(file);
+  els.attachInput.value = '';
+});
 
 els.input.addEventListener('input', autoGrow);
 els.input.addEventListener('keydown', (e) => {
@@ -1115,22 +1273,41 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('focus', () => void pollStatus());
 
 async function init() {
+  fillOrnaments();
   initRail();
+  $<HTMLImageElement>('#band-icon').src = logoUrl;
+  initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
+  initSecurityCheck();
+  onPendingChange((n) => {
+    pendingUpdates = n;
+    renderReviewChip();
+  });
+  $('#op-open-settings').addEventListener('click', openSettings);
   initLogPage();
   initOperatorPage();
   initMemoryPage();
   // A proposal may have created a project; keep the dropdown current.
-  void listen('memory-changed', () => void loadProjects());
+  void listen('memory-changed', () => {
+    void loadProjects();
+    if (currentPage() === 'chat') void refreshContinuity();
+  });
   els.projectSelect.addEventListener('change', () => void chooseProject());
   void loadOperator().catch((e) => toast(`Couldn't load operator settings: ${errorText(e)}`, 'error'));
-  els.newChat.innerHTML = `${icons.plus}<span>New chat</span>`;
+  els.newChat.innerHTML = `${starburst(14)}<span>New conversation</span>`;
   els.newChat.title = `New chat (${modKey}+N)`;
   els.refreshModels.innerHTML = icons.refresh;
   els.openSettings.innerHTML = icons.settings;
+  els.loadedBtn.innerHTML = icons.refresh;
+  els.attach.innerHTML = icons.clip;
+  els.send.innerHTML = icons.arrowUp;
+  els.stop.innerHTML = icons.square;
   els.composerHint.innerHTML =
-    '<kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>Esc</kbd> stop · drop text files to attach';
+    '<span class="dots" aria-hidden="true"><span class="on"></span><span></span></span><span>Drop or attach text files</span>' +
+    '<span class="spacer"></span><span>Enter · send</span><span>Shift+Enter · new line</span><span>Esc · stop</span>';
+  void api.appPaths().then((p) => ($('#home-path').textContent = p.home)).catch(() => {});
   try {
     state.settings = await api.getSettings();
+    applyTheme(state.settings.theme);
   } catch (e) {
     toast(`Couldn't load settings: ${errorText(e)}`, 'error');
   }
@@ -1140,6 +1317,8 @@ async function init() {
   await refreshConversations();
   void loadProjects();
   void pollStatus();
+  void renderLoadedPanel();
+  void refreshContinuity();
   els.input.focus();
 }
 

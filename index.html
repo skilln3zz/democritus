@@ -1,54 +1,64 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light" data-theme-pref="system">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Democritus</title>
+    <!-- Must stay a classic, blocking script: it sets the theme before the first paint. -->
+    <script src="/theme-boot.js"></script>
   </head>
   <body>
-    <div id="app">
-      <nav id="rail" aria-label="Pages">
-        <button class="rail-btn active" type="button" data-page="chat"><span class="rail-icon" data-icon="chat"></span><span>Chat</span></button>
-        <button class="rail-btn" type="button" data-page="memory"><span class="rail-icon" data-icon="brain"></span><span>Memory</span><span id="memory-badge" class="rail-badge" hidden></span></button>
-        <button class="rail-btn" type="button" data-page="log"><span class="rail-icon" data-icon="log"></span><span>Log</span></button>
-        <button class="rail-btn" type="button" data-page="operator"><span class="rail-icon" data-icon="shield"></span><span>Operator</span></button>
-        <div class="rail-spacer"></div>
-        <button id="lockdown-btn" class="rail-btn lockdown" type="button" title="Lockdown: block all internet access and pause learning">
-          <span class="rail-icon" data-icon="lock"></span><span class="lockdown-label">Lockdown</span>
-        </button>
-      </nav>
-      <aside id="sidebar">
-        <div class="sidebar-top">
-          <button id="new-chat" class="btn primary block" type="button"></button>
-          <div class="search-wrap">
-            <input id="search" type="search" placeholder="Search chats" autocomplete="off" spellcheck="false" />
+    <div id="app" data-page="chat">
+      <!-- ================= CHAT ================= -->
+      <section id="page-chat" class="page" aria-label="Chat">
+        <header id="topbar" class="band">
+          <div class="band-bg" aria-hidden="true"></div>
+          <div class="band-left">
+            <div class="brandline">
+              <img id="band-icon" class="band-icon" alt="" width="34" height="34" />
+              <div class="caps-stack"><span>A local assistant</span><span class="muted">Atoms &amp; the void</span></div>
+              <span data-orn="orbit"></span>
+            </div>
+            <div class="caps muted band-sub">
+              <span data-orn="dots"></span>
+              <span><span id="conv-number">N° —</span> · <span id="conv-caps">New conversation</span></span>
+              <span data-orn="checker"></span>
+            </div>
           </div>
-        </div>
-        <ul id="conversation-list" aria-label="Conversations"></ul>
-        <div id="sidebar-empty" class="muted small" hidden>No conversations yet</div>
-      </aside>
-
-      <main id="main">
-        <header id="topbar">
-          <div class="model-picker">
-            <label for="model-select" class="muted small">Model</label>
-            <select id="model-select"></select>
-            <button id="refresh-models" class="icon-btn" type="button" title="Refresh model list"></button>
+          <div class="band-mid">
+            <span data-orn="pennant"></span>
+            <div class="wordmark-row">
+              <span data-orn="sparkle" class="accent"></span>
+              <h1 class="wordmark">DEMOCRITUS</h1>
+              <span data-orn="sparkle" class="accent"></span>
+            </div>
+            <span id="conv-title-caps" class="caps muted">“A private assistant on this computer”</span>
           </div>
-          <div class="model-picker">
-            <label for="project-select" class="muted small">Project</label>
-            <select id="project-select"></select>
+          <div class="band-right">
+            <div class="brain-row">
+              <label class="brain-picker" for="model-select">
+                <span class="caps muted">Brain</span>
+                <select id="model-select"></select>
+                <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+              </label>
+              <button id="refresh-models" class="icon-btn" type="button" title="Refresh model list" aria-label="Refresh model list"></button>
+            </div>
+            <div class="brain-row">
+              <label class="project-picker" for="project-select">
+                <span class="caps muted">Project</span>
+                <select id="project-select"></select>
+              </label>
+            </div>
+            <div class="caps muted status-line">
+              <button id="server-status" class="status-pill" type="button" data-state="checking">
+                <span class="dot"></span><span class="label">Checking server…</span>
+              </button>
+              <span data-orn="dots" data-first="open"></span>
+              <span id="brain-speed" class="mono ink"></span>
+              <button id="open-settings" class="icon-btn" type="button" title="Chat and model settings" aria-label="Chat and model settings"></button>
+            </div>
           </div>
-          <div class="loaded-wrap">
-            <button id="loaded-btn" class="pill" type="button" title="Models currently in memory" hidden></button>
-            <div id="loaded-panel" class="popover" hidden></div>
-          </div>
-          <div class="spacer"></div>
-          <button id="server-status" class="status-pill" type="button" data-state="checking">
-            <span class="dot"></span><span class="label">Checking server…</span>
-          </button>
-          <button id="open-settings" class="icon-btn" type="button" title="Settings"></button>
         </header>
 
         <div id="lockdown-banner" class="banner lockdown-banner" hidden>
@@ -59,115 +69,252 @@
           <button id="banner-start" class="btn small" type="button">Start server</button>
         </div>
 
-        <section id="messages" aria-live="polite"></section>
+        <div class="page-row chat-row">
+          <aside id="sidebar" class="panel panel-left" aria-label="Conversations">
+            <button id="new-chat" class="btn hex accent block" type="button"></button>
+            <div class="search-wrap">
+              <label for="search" class="sr-only">Search chats</label>
+              <input id="search" type="search" placeholder="Search chats" autocomplete="off" spellcheck="false" />
+            </div>
+            <div id="conversation-list"></div>
+            <div id="sidebar-empty" class="muted small" hidden>No conversations yet</div>
+            <nav class="side-nav" aria-label="Pages">
+              <button class="rail-btn nav-link" type="button" data-page="memory">Memory<span id="memory-badge" class="rail-badge" hidden></span></button>
+              <button class="rail-btn nav-link" type="button" data-page="operator">Settings &amp; safety</button>
+              <button class="rail-btn nav-link" type="button" data-page="log">Activity log</button>
+              <button id="lockdown-btn" class="nav-link lockdown" type="button" title="Lockdown: block all internet access and pause learning">
+                <span class="rail-icon" data-icon="unlock"></span><span class="lockdown-label">Lockdown</span>
+              </button>
+            </nav>
+            <div class="caps muted side-foot"><span id="home-path"></span><span data-orn="starburst" data-size="16" class="ink"></span></div>
+          </aside>
 
-        <footer id="composer">
-          <div id="attachments"></div>
-          <div class="composer-box">
-            <textarea id="input" rows="1" placeholder="Message Democritus…" spellcheck="true"></textarea>
-            <button id="send" class="btn primary" type="button" title="Send (Enter)">Send</button>
-            <button id="stop" class="btn danger" type="button" title="Stop generating (Esc)" hidden>Stop</button>
+          <main id="main">
+            <section id="messages" aria-label="Messages" aria-live="polite"></section>
+
+            <footer id="composer" class="composer-band">
+              <div id="attachments"></div>
+              <div class="composer-box">
+                <button id="attach" class="icon-btn square" type="button" title="Attach text files" aria-label="Attach text files"></button>
+                <input id="attach-input" type="file" multiple hidden />
+                <label for="input" class="sr-only">Message Democritus</label>
+                <textarea id="input" rows="1" placeholder="Write to Democritus…" spellcheck="true"></textarea>
+                <button id="send" class="send-diamond" type="button" title="Send (Enter)" aria-label="Send"></button>
+                <button id="stop" class="send-diamond stop" type="button" title="Stop generating (Esc)" aria-label="Stop generating" hidden></button>
+              </div>
+              <div class="composer-hint caps muted"></div>
+            </footer>
+
+            <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
+          </main>
+
+          <aside id="continuity" class="panel panel-right" aria-label="Continuity">
+            <section class="cont-section">
+              <h2 class="caps muted section-head">Current state</h2>
+              <p id="cont-state" class="state-title">A fresh start</p>
+              <p id="cont-next" class="small muted" hidden></p>
+            </section>
+            <section id="cont-steps-wrap" class="cont-section" hidden>
+              <h2 id="cont-steps-head" class="caps muted section-head">Project</h2>
+              <ol id="cont-steps" class="steps"></ol>
+            </section>
+            <section class="cont-section">
+              <h2 class="caps muted section-head with-action">
+                <span>In memory</span>
+                <button id="loaded-btn" class="icon-btn small-icon" type="button" title="Check which models are loaded" aria-label="Check which models are loaded"></button>
+              </h2>
+              <div id="loaded-panel" class="loaded-list"></div>
+            </section>
+            <div class="caps muted cont-foot"><span id="cont-recalled">Recalled · —</span><span data-orn="dots" data-first="open"></span></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ================= MEMORY ================= -->
+      <section id="page-memory" class="page" aria-label="Memory" hidden>
+        <header class="band">
+          <div class="band-bg" aria-hidden="true"></div>
+          <div class="band-left">
+            <button class="rail-btn back-link" type="button" data-page="chat"><span class="rail-icon" data-icon="back"></span>Chat</button>
+            <div class="caps-stack"><span id="mem-path" class="ink"></span><span id="mem-count" class="muted"></span></div>
           </div>
-          <div class="composer-hint muted small"></div>
-        </footer>
-
-        <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
-      </main>
-
-      <section id="page-memory" class="page" hidden>
-        <header class="page-head">
-          <div>
-            <h1>Memory</h1>
-            <p class="muted small">Plain Markdown files in <code id="mem-path"></code>. Edit them here or in any editor; Democritus always uses the version on disk. Every change is kept in the history, so it can be undone.</p>
+          <div class="band-mid">
+            <div class="wordmark-row">
+              <span data-orn="starburst" data-size="16" class="accent"></span>
+              <h1 class="wordmark">MEMORY</h1>
+              <span data-orn="starburst" data-size="16" class="accent"></span>
+            </div>
+            <span id="mem-status" class="caps muted"></span>
+          </div>
+          <div class="band-right band-controls">
+            <label class="outline-check"><input id="mem-auto" type="checkbox" />Auto-apply</label>
+            <label class="outline-check strong"><input id="mem-pause" type="checkbox" />Pause memory</label>
           </div>
         </header>
-        <div class="page-tools">
-          <input id="mem-search" type="search" placeholder="Search memory…" spellcheck="false" />
-          <label class="inline-switch"><input id="mem-pause" type="checkbox" class="switch" /><span>Pause memory</span></label>
-          <span id="mem-status" class="muted small"></span>
-          <div class="spacer"></div>
-          <button id="mem-reset" class="btn small" type="button">Reset everything learned…</button>
-        </div>
-        <div id="mem-proposals" class="mem-proposals" hidden></div>
-        <div class="mem-layout">
-          <aside id="mem-files" class="mem-files"></aside>
-          <div class="mem-editor">
-            <div class="mem-editor-head">
-              <div><strong id="mem-file-title"></strong> <span id="mem-file-path" class="muted small"></span></div>
-              <div class="spacer"></div>
+        <div class="page-row mem-row">
+          <nav class="panel panel-left mem-index" aria-label="Memory files">
+            <label for="mem-search" class="sr-only">Search memory</label>
+            <input id="mem-search" type="search" placeholder="Search memory…" spellcheck="false" />
+            <div class="caps muted section-head">Index</div>
+            <div id="mem-files" class="mem-files"></div>
+            <div id="mem-semantic" class="mem-semantic small muted"></div>
+          </nav>
+          <section class="paper-page mem-editor" aria-label="File">
+            <div class="mem-editor-head caps muted">
+              <span id="mem-file-path" class="ink"></span>
+              <span class="spacer"></span>
               <button id="mem-history-btn" class="btn small" type="button">History</button>
               <button id="mem-delete" class="btn small" type="button">Delete</button>
-              <button id="mem-save" class="btn small primary" type="button">Save</button>
+              <button id="mem-save" class="btn small hex accent" type="button">Save</button>
             </div>
+            <h2 id="mem-file-title" class="page-title"></h2>
+            <label for="mem-text" class="sr-only">File contents</label>
             <textarea id="mem-text" spellcheck="false"></textarea>
             <div id="mem-history" class="mem-history" hidden></div>
-          </div>
-        </div>
-        <div id="mem-semantic" class="mem-semantic muted small"></div>
-      </section>
-
-      <section id="page-log" class="page" hidden>
-        <header class="page-head">
-          <div>
-            <h1>Activity log</h1>
-            <p class="muted small">Every network request, download, approval, memory change and setting change. Stored only on this computer in <code id="log-path"></code>.</p>
-          </div>
-        </header>
-        <div class="page-tools">
-          <select id="log-kind">
-            <option value="">All events</option>
-            <option value="network">Network</option>
-            <option value="download">Downloads</option>
-            <option value="approval">Approvals</option>
-            <option value="memory">Memory</option>
-            <option value="setting">Settings</option>
-            <option value="security">Security</option>
-            <option value="model">Models</option>
-          </select>
-          <input id="log-search" type="search" placeholder="Filter…" spellcheck="false" />
-          <button id="log-refresh" class="btn small" type="button">Refresh</button>
-        </div>
-        <div class="page-body">
-          <table class="log-table">
-            <thead><tr><th>Time</th><th>Kind</th><th>Event</th><th>Details</th></tr></thead>
-            <tbody id="log-rows"></tbody>
-          </table>
-          <p id="log-empty" class="muted small" hidden>No matching events.</p>
+          </section>
+          <aside class="panel panel-right mem-side" aria-label="Proposed updates">
+            <div id="mem-proposals" class="mem-proposals"></div>
+            <div class="caps muted section-head">Recent</div>
+            <div id="mem-recent" class="recent-list"></div>
+            <p class="small muted mem-note">Updates write only inside the memory folder. Every change is versioned.</p>
+            <button id="mem-reset" class="btn small" type="button">Reset everything learned…</button>
+          </aside>
         </div>
       </section>
 
-      <section id="page-operator" class="page" hidden>
-        <header class="page-head">
-          <div>
-            <h1>Operator</h1>
-            <p class="muted small">You are the operator. These permissions are enforced by the app itself. Nothing in a chat, a dropped file, a memory file or a model's output can change them. Everything starts off.</p>
+      <!-- ================= ACTIVITY LOG ================= -->
+      <section id="page-log" class="page" aria-label="Activity log" hidden>
+        <header class="band">
+          <div class="band-bg" aria-hidden="true"></div>
+          <div class="band-left">
+            <button class="rail-btn back-link" type="button" data-page="chat"><span class="rail-icon" data-icon="back"></span>Chat</button>
+            <div class="caps-stack"><span class="ink">Stored only on this computer</span><span id="log-path" class="muted"></span></div>
+          </div>
+          <div class="band-mid">
+            <div class="wordmark-row">
+              <span data-orn="sparkle" class="accent"></span>
+              <h1 class="wordmark">ACTIVITY</h1>
+              <span data-orn="sparkle" class="accent"></span>
+            </div>
+            <span class="caps muted">Network · downloads · approvals · memory · settings</span>
+          </div>
+          <div class="band-right">
+            <button class="rail-btn back-link" type="button" data-page="operator">Settings &amp; safety</button>
           </div>
         </header>
-        <div class="page-body narrow">
-          <div class="card">
-            <h2>Permissions</h2>
+        <div class="page-row">
+          <section class="panel panel-wide log-panel" aria-label="Log entries">
+            <div class="page-tools">
+              <label for="log-kind" class="sr-only">Kind of event</label>
+              <select id="log-kind">
+                <option value="">All events</option>
+                <option value="network">Network</option>
+                <option value="download">Downloads</option>
+                <option value="approval">Approvals</option>
+                <option value="memory">Memory</option>
+                <option value="setting">Settings</option>
+                <option value="security">Security</option>
+                <option value="model">Models</option>
+              </select>
+              <label for="log-search" class="sr-only">Filter</label>
+              <input id="log-search" type="search" placeholder="Filter…" spellcheck="false" />
+              <button id="log-refresh" class="btn small" type="button">Refresh</button>
+            </div>
+            <div class="page-body">
+              <table class="log-table">
+                <thead><tr><th>Time</th><th>Kind</th><th>Event</th><th>Details</th></tr></thead>
+                <tbody id="log-rows"></tbody>
+              </table>
+              <p id="log-empty" class="muted small" hidden>No matching events.</p>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ================= SETTINGS & SAFETY ================= -->
+      <section id="page-operator" class="page" aria-label="Settings and safety" hidden>
+        <header id="op-band" class="band">
+          <div class="band-bg" aria-hidden="true"></div>
+          <div class="band-left">
+            <button class="rail-btn back-link" type="button" data-page="chat"><span class="rail-icon" data-icon="back"></span>Chat</button>
+            <div class="caps-stack"><span>You are the operator</span><span class="soft">Nothing changes unless you change it</span></div>
+          </div>
+          <div class="band-mid">
+            <div class="wordmark-row">
+              <span data-orn="sparkle" class="accent"></span>
+              <h1 id="op-band-title" class="wordmark">LOCKDOWN</h1>
+              <span data-orn="sparkle" class="accent"></span>
+            </div>
+            <span id="op-band-text" class="small">One switch blocks all internet access and pauses learning.</span>
+          </div>
+          <div class="band-right">
+            <button id="op-lock-btn" class="btn hex accent big" type="button" aria-pressed="false">LOCK DOWN</button>
+          </div>
+        </header>
+        <div class="page-row op-row">
+          <section class="panel panel-left op-main" aria-label="Settings">
+            <div class="appearance">
+              <div class="appearance-text">
+                <span class="caps muted">Appearance</span>
+                <span class="display-title">Light &amp; dark</span>
+                <span class="small muted">Cream paper by day, twilight navy by night. The dusk stays behind both.</span>
+              </div>
+              <div id="theme-switch" class="segmented" role="radiogroup" aria-label="Theme">
+                <button type="button" role="radio" aria-checked="false" data-theme-choice="light"><span class="rail-icon" data-icon="sun"></span>Light</button>
+                <button type="button" role="radio" aria-checked="false" data-theme-choice="dark"><span class="rail-icon" data-icon="moon"></span>Dark</button>
+                <button type="button" role="radio" aria-checked="true" data-theme-choice="system">Follow system</button>
+              </div>
+            </div>
+
+            <div class="caps muted section-head with-dots">
+              <span class="ink">Permissions</span><span>All off by default · enforced in the app</span><span data-orn="dots"></span>
+            </div>
             <div id="op-toggles"></div>
-          </div>
-          <div class="card">
-            <h2>Download allowlist</h2>
-            <p class="muted small">Model files may only come from these addresses (one per line, https only). Only <code>.gguf</code> and <code>.safetensors</code> are accepted; pickle formats (<code>.bin</code>, <code>.pt</code>, <code>.pkl</code>) and executables are always refused.</p>
+
+            <div class="caps muted section-head">Download allowlist</div>
+            <div id="op-allow-chips" class="chip-row"></div>
+            <p class="small muted">Model files may only come from these addresses (one per line, https only). Only <code>.gguf</code> and <code>.safetensors</code> are accepted; pickle formats (<code>.bin</code>, <code>.pt</code>, <code>.pkl</code>) and executables are always refused.</p>
+            <label for="op-allowlist" class="sr-only">Download allowlist</label>
             <textarea id="op-allowlist" rows="3" spellcheck="false"></textarea>
             <div class="row-end"><button id="op-allowlist-save" class="btn small" type="button">Save allowlist</button></div>
-          </div>
-          <div class="card">
-            <h2>Download a model file</h2>
-            <p class="muted small">Paste a link to a file. Democritus asks you twice: once to look up its size and checksum, then to download it. Each approval works once. Files go to <code id="op-downloads-path"></code>.</p>
+
+            <div class="caps muted section-head">Download a model file</div>
+            <p class="small muted">Paste a link to a file. Democritus asks you twice: once to look up its size and checksum, then to download it. Each approval works once. Files go to <code id="op-downloads-path"></code>.</p>
             <div class="inline-form">
+              <label for="op-download-url" class="sr-only">File address</label>
               <input id="op-download-url" type="text" placeholder="https://huggingface.co/Qwen/…/resolve/main/….gguf" spellcheck="false" />
-              <button id="op-download-btn" class="btn primary small" type="button">Check</button>
+              <button id="op-download-btn" class="btn hex accent small" type="button">Check</button>
             </div>
             <p id="op-download-hint" class="muted small"></p>
             <div id="op-download-status" class="small" hidden></div>
-          </div>
-          <div class="card">
-            <h2>Network</h2>
-            <p class="muted small">Democritus is offline by default: it talks only to the model server on this computer. It has no telemetry, analytics, crash reporting or update checks, and the window's built-in browser engine runs with its background services switched off. The only way to reach the internet is a download you approve above.</p>
-          </div>
+
+            <div class="caps muted section-head with-action">
+              <span class="ink">Security check</span>
+              <button id="sec-run" class="btn small" type="button">Check again</button>
+            </div>
+            <p class="small muted">Reads how Ollama and Windows are set up. Nothing changes unless you press a fix button and confirm the exact commands.</p>
+            <ol id="sec-list" class="sec-list"></ol>
+
+            <div class="caps muted section-head">Network</div>
+            <p class="small muted">Democritus is offline by default: it talks only to the model server on this computer. It has no telemetry, analytics, crash reporting or update checks, and the window's built-in browser engine runs with its background services switched off. The only way to reach the internet is a download you approve above.</p>
+            <div class="op-foot">
+              <button id="op-open-settings" class="btn small" type="button">Chat &amp; model settings…</button>
+              <span class="caps muted">No paid services · no telemetry · text only</span>
+            </div>
+          </section>
+
+          <aside class="panel panel-right paper2 op-side" aria-label="Activity log">
+            <div class="caps muted section-head with-action">
+              <span class="ink">Activity log</span>
+              <button class="rail-btn link-btn" type="button" data-page="log">Open full log</button>
+            </div>
+            <ol id="op-log-preview" class="log-preview"></ol>
+            <div class="reset-box">
+              <span class="display-title small-title">Reset everything learned</span>
+              <span class="small muted">Clears memory, pending updates and project links. Backs up the memory folder first. Conversations and settings are kept.</span>
+              <button id="op-reset" class="btn small" type="button">Reset…</button>
+            </div>
+          </aside>
         </div>
       </section>
     </div>
@@ -185,9 +332,22 @@
       </form>
     </dialog>
 
+    <dialog id="fix-dialog">
+      <form method="dialog">
+        <h2 id="fix-title">Run these commands?</h2>
+        <p id="fix-what" class="muted small"></p>
+        <pre id="fix-commands" class="command-box"></pre>
+        <p id="fix-note" class="muted small"></p>
+        <div class="dialog-actions">
+          <button class="btn" value="cancel" type="submit">Cancel</button>
+          <button class="btn primary" value="run" type="submit">Run commands</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="settings-dialog">
       <form id="settings-form" method="dialog">
-        <h2>Settings</h2>
+        <h2>Chat &amp; model settings</h2>
         <label class="field">
           <span>System prompt</span>
           <textarea id="set-system" rows="5"></textarea>
@@ -230,6 +390,7 @@
           <span>Democritus home folder (memory, logs, training data). Leave empty for the default.</span>
           <input id="set-home" type="text" spellcheck="false" autocomplete="off" />
         </label>
+        <p class="muted small">Light and dark mode are under Settings &amp; safety → Appearance.</p>
         <p id="settings-error" class="form-error" hidden></p>
         <div class="dialog-actions">
           <button class="btn" type="button" id="settings-cancel">Cancel</button>

@@ -13,6 +13,8 @@ export interface Settings {
   memoryHelperModel: string;
   activeProject: string;
   contextTokens: number;
+  /** 'system' (follow Windows), 'light' or 'dark'. */
+  theme: string;
 }
 
 export interface ModelInfo {
@@ -238,6 +240,24 @@ export interface ProjectInfo {
   title: string;
 }
 
+export interface SecurityFix {
+  id: string;
+  label: string;
+  /** The exact commands that will run (empty for in-app fixes like Lockdown). */
+  commands: string[];
+  /** Runs in an elevated PowerShell (Windows asks for administrator rights). */
+  admin: boolean;
+  note: string;
+}
+
+export interface SecurityItem {
+  id: string;
+  title: string;
+  status: 'ok' | 'bad' | 'unknown' | 'info';
+  detail: string;
+  fix: SecurityFix | null;
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -290,6 +310,8 @@ export const api = {
   getOperator: () => invoke<OperatorSettings>('get_operator'),
   saveOperator: (settings: OperatorSettings) => invoke<OperatorSettings>('save_operator', { settings }),
   setLockdown: (on: boolean) => invoke<OperatorSettings>('set_lockdown', { on }),
+  securityCheck: () => invoke<SecurityItem[]>('security_check'),
+  securityFix: (id: string) => invoke<void>('security_fix', { id }),
   readActivity: (limit: number, kind: string, query: string) =>
     invoke<ActivityEntry[]>('read_activity', { limit, kind: kind || null, query: query || null }),
   requestDownload: (url: string) => invoke<Approval>('request_download', { url }),

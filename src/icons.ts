@@ -23,10 +23,18 @@ export const icons = {
   chip: svg(
     '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/>',
   ),
+  back: svg('<path d="M15 6l-6 6 6 6"/>'),
+  sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: svg('<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'),
+  clip: svg('<path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/>'),
+  arrowUp: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+  square: svg('<rect x="7" y="7" width="10" height="10" fill="currentColor"/>'),
+  starburst: svg('<path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"/>'),
   copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
 };
 
-// The app icon (generated from democritus-split-1024.png), bundled locally.
+// The app icon (generated from design/assets/democritus-icon-1024.png), bundled locally.
 import logoUrl from './assets/democritus-256.png';
 
+export { logoUrl };
 export const logo = `<img class="app-logo" src="${logoUrl}" width="64" height="64" alt="" />`;
