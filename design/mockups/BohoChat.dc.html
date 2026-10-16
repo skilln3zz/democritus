@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Democritus — Chat (bohemian)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Italiana&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#141A2E}
+a{color:inherit}a:hover{opacity:0.8}
+button{font-family:inherit}
+.dusk{background-color:#16203A;background-image:linear-gradient(180deg,rgba(10,14,30,0.15) 0%,rgba(10,14,30,0) 40%,rgba(10,10,14,0.35) 100%),url(/_blob/f63cb246dc2b263f8dee857c31ed5eaa);background-size:cover;background-position:center 72%}
+</style>
+</helmet>
+<div class="dusk" style="min-height: 900px; box-sizing: border-box; padding: 22px; display: flex; flex-direction: column; gap: 16px; font-family: 'Manrope', sans-serif; font-size: 14px; line-height: 1.5; color: {{t.ink}}">
+
+  <!-- Top band -->
+  <header style="position: relative; z-index: 2; padding: 16px 26px 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; gap: 16px">
+    <div aria-hidden="true" style="position: absolute; inset: 0; z-index: -1; background: {{t.paper}}; clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 70% 100%, calc(70% - 28px) calc(100% - 28px), calc(30% + 28px) calc(100% - 28px), 30% 100%, 0 100%, 0 18px)"></div>
+    <div style="display: flex; flex-direction: column; gap: 10px; min-width: 0">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <img src="/_blob/de8001cbb2c2843dad7ac9f8986c3a3e" alt="Democritus" style="width: 34px; height: 34px; image-rendering: pixelated; border-radius: 6px">
+        <div style="display: flex; flex-direction: column; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; line-height: 1.3">
+          <span>A LOCAL ASSISTANT</span>
+          <span style="color: {{t.muted}}">ATOMS &amp; THE VOID</span>
+        </div>
+        <svg width="34" height="16" viewBox="0 0 34 16" fill="none" stroke="currentColor" stroke-width="1.1" aria-hidden="true"><ellipse cx="17" cy="8" rx="15" ry="6"></ellipse><path d="M17 1v14M10 8h14"></path></svg>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}">
+        <span style="display: inline-flex; gap: 3px" aria-hidden="true"><span style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ink}}"></span><span style="width: 6px; height: 6px; border-radius: 50%; border: 1px solid {{t.ink}}; box-sizing: border-box"></span></span>
+        N° 014 · MEMORY FOLDER
+        <svg width="44" height="10" viewBox="0 0 40 10" aria-hidden="true"><g fill="{{t.ink}}"><rect x="0" y="0" width="5" height="5"></rect><rect x="10" y="0" width="5" height="5"></rect><rect x="20" y="0" width="5" height="5"></rect><rect x="30" y="0" width="5" height="5"></rect><rect x="5" y="5" width="5" height="5"></rect><rect x="15" y="5" width="5" height="5"></rect><rect x="25" y="5" width="5" height="5"></rect><rect x="35" y="5" width="5" height="5"></rect></g></svg>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center">
+      <svg width="12" height="10" viewBox="0 0 12 10" aria-hidden="true"><path d="M0 0h12L6 4z M6 4v6" fill="{{t.ink}}" stroke="{{t.ink}}"></path></svg>
+      <div style="display: flex; align-items: center; gap: 14px">
+        <svg style="color: {{t.accent}}" width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M11 0v14M4 7h14"></path><circle cx="1.5" cy="7" r="1.2" fill="currentColor"></circle><circle cx="20.5" cy="7" r="1.2" fill="currentColor"></circle></svg>
+        <h1 style="margin: 0; font-family: 'Italiana', serif; font-weight: 400; font-size: 46px; letter-spacing: 3px; line-height: 1">DEMOCRITUS</h1>
+        <svg style="color: {{t.accent}}" width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M11 0v14M4 7h14"></path><circle cx="1.5" cy="7" r="1.2" fill="currentColor"></circle><circle cx="20.5" cy="7" r="1.2" fill="currentColor"></circle></svg>
+      </div>
+      <span style="font-size: 9px; font-weight: 700; letter-spacing: 1.6px; color: {{t.muted}}">“MEMORY FOLDER — PATH VALIDATION”</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 0">
+      <div style="position: relative">
+        <button onClick="{{ toggleBrain }}" aria-expanded="{{ brainOpen }}" style="display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border: 1px solid {{t.ink}}; background: transparent; color: {{t.ink}}; cursor: pointer; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)">
+          <span style="font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">BRAIN</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{ brain.id }}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+        <sc-if value="{{ brainOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position: absolute; right: 0; top: 52px; z-index: 5; width: 300px; background: {{t.paper2}}; border: 1px solid {{t.ink}}; padding: 6px; box-shadow: 0 18px 40px rgba(0,0,0,0.35)">
+            <div style="padding: 8px 10px; font-size: 12px; color: {{t.muted}}">A new brain keeps this conversation and its memory.</div>
+            <sc-for list="{{ models }}" as="m" hint-placeholder-count="4">
+              <button onClick="{{ m.pick }}" style="{{ m.rowStyle }}">
+                <span style="display: flex; flex-direction: column; align-items: flex-start">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{ m.id }}</span>
+                  <span style="{{ m.noteStyle }}">{{ m.note }}</span>
+                </span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">{{ m.speed }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}">
+        <span>OFFLINE · LOCALHOST</span>
+        <span style="display: inline-flex; gap: 3px" aria-hidden="true"><span style="width: 6px; height: 6px; border-radius: 50%; border: 1px solid {{t.ink}}; box-sizing: border-box"></span><span style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ink}}"></span></span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 500; font-size: 11px; color: {{t.ink}}">{{ brain.speed }}</span>
+      </div>
+    </div>
+  </header>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch">
+
+    <!-- Sidebar -->
+    <nav aria-label="Conversations" style="flex: 1 1 250px; max-width: 100%; box-sizing: border-box; background: {{t.paper}}; padding: 22px 18px; display: flex; flex-direction: column; gap: 18px; clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px)">
+      <button style="display: flex; align-items: center; justify-content: center; gap: 10px; height: 46px; border: none; background: {{t.accent}}; color: {{t.accentInk}}; font-size: 13px; font-weight: 700; letter-spacing: 0.4px; cursor: pointer; clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+        New conversation
+      </button>
+
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="display: flex; justify-content: space-between; padding: 0 4px 8px; border-bottom: 1px solid {{t.line}}; margin-bottom: 6px; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}"><span>PROJECT · DEMOCRITUS</span><span>03</span></div>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; background: {{t.sel}}; text-decoration: none; font-size: 13px; font-weight: 600"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: {{t.muted}}">014</span>Memory folder — path validation</a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: {{t.muted}}">013</span>Icon &amp; branding</a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: {{t.muted}}">011</span>Benchmark results</a>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="padding: 0 4px 8px; border-bottom: 1px solid {{t.line}}; margin-bottom: 6px; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">LOOSE PAGES</div>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: {{t.muted}}">009</span>Notes on Greek atomism</a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: {{t.muted}}">006</span>Rust lifetimes, explained</a>
+      </div>
+
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid {{t.line}}; padding-top: 12px">
+        <a href="BohoMemory.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px">Memory<span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 11px; background: {{t.accent}}; color: {{t.accentInk}}; padding: 0 7px">1</span></a>
+        <a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px">Performance</a>
+        <a href="BohoOperator.dc.html" style="display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; text-decoration: none; font-size: 13px">Operator &amp; safety</a>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}">
+        <span>D:\DEMOCRITUS</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{t.ink}}" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+      </div>
+    </nav>
+
+    <!-- Chat window over the dusk -->
+    <main style="flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+      <section aria-label="Messages" style="flex: 1; display: flex; flex-direction: column; gap: 22px; padding: 10px 6% 0">
+
+        <div style="align-self: flex-end; max-width: 72%; background: {{t.slip}}; color: {{t.onPhoto}}; padding: 12px 18px; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)">
+          We were building the memory folder. Where did we leave off?
+        </div>
+
+        <article style="max-width: 82%; background: {{t.paper2}}; padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 10px; clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%, 0 14px)">
+          <div style="display: flex; align-items: center; gap: 10px; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{t.accent}}" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+            <span style="color: {{t.ink}}">DEMOCRITUS</span><span>· QWEN3.5:9B</span><span style="margin-left: auto">N° 013</span>
+          </div>
+          <button onClick="{{ toggleThink }}" aria-expanded="{{ thinkOpen }}" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border: 1px dashed {{t.lineStrong}}; background: transparent; color: {{t.muted}}; font-size: 12px; cursor: pointer">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="{{ thinkChevron }}"></path></svg>Thought for 3 seconds
+          </button>
+          <sc-if value="{{ thinkOpen }}" hint-placeholder-val="{{ false }}">
+            <p style="margin: 0; padding-left: 12px; border-left: 1px solid {{t.lineStrong}}; font-family: 'Italiana', serif; font-size: 16px; color: {{t.codeLine}}">Read current_state.md and the project file. Folder structure is done; path validation is next. The operator likes short answers.</p>
+          </sc-if>
+          <p style="margin: 0">From my notes: the folder structure, <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">index.md</span> and version history are done. Next is path validation, so updates can only land inside <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">memory\</span>.</p>
+        </article>
+
+        <div role="separator" style="display: flex; align-items: center; gap: 14px; color: {{t.onPhoto}}; font-size: 10px; font-weight: 700; letter-spacing: 1.8px">
+          <span style="flex: 1; height: 1px; background: rgba(244,239,228,0.5)"></span>
+          <svg style="color: {{t.accent}}" width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M11 0v14M4 7h14"></path><circle cx="1.5" cy="7" r="1.2" fill="currentColor"></circle><circle cx="20.5" cy="7" r="1.2" fill="currentColor"></circle></svg>
+          BRAIN SWITCHED TO QWEN3.8:27B · HANDOFF PASSED
+          <svg style="color: {{t.accent}}" width="22" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M11 0v14M4 7h14"></path><circle cx="1.5" cy="7" r="1.2" fill="currentColor"></circle><circle cx="20.5" cy="7" r="1.2" fill="currentColor"></circle></svg>
+          <span style="flex: 1; height: 1px; background: rgba(244,239,228,0.5)"></span>
+        </div>
+
+        <div style="align-self: flex-end; max-width: 72%; background: {{t.slip}}; color: {{t.onPhoto}}; padding: 12px 18px; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)">
+          Write the function that validates a memory path.
+        </div>
+
+        <article style="max-width: 82%; background: {{t.paper2}}; padding: 16px 20px 16px; display: flex; flex-direction: column; gap: 12px; clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%, 0 14px)">
+          <div style="display: flex; align-items: center; gap: 10px; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="{{t.accent}}" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+            <span style="color: {{t.ink}}">DEMOCRITUS</span><span>· QWEN3.8:27B</span><span style="margin-left: auto">N° 014</span>
+          </div>
+          <p style="margin: 0">This rejects absolute paths and any <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">..</span> segment, then checks the result still sits under the memory root:</p>
+          <div style="background: {{t.codeBg}}; color: {{t.codeText}}">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 14px; border-bottom: 1px solid {{t.codeLine}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.codeMuted}}">
+              <span>RUST · MEMORY.RS</span>
+              <button aria-label="Copy code" style="height: 30px; padding: 0 10px; border: 1px solid {{t.codeMuted}}; background: transparent; color: {{t.codeText}}; font-size: 11px; cursor: pointer">Copy</button>
+            </div>
+<pre style="margin: 0; padding: 12px 16px; overflow-x: auto; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.6"><span style="color: {{t.codeKw}}">pub fn</span> validate_memory_path(root: &amp;Path, rel: &amp;str)
+    -&gt; Result&lt;PathBuf, MemoryError&gt; {
+    <span style="color: {{t.codeMuted}}">// reject absolute paths and parent jumps</span>
+    <span style="color: {{t.codeKw}}">let</span> p = Path::new(rel);
+    <span style="color: {{t.codeKw}}">if</span> p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
+        <span style="color: {{t.codeKw}}">return</span> Err(MemoryError::OutsideMemory);
+    }
+    Ok(root.join(p))
+}</pre>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+            <button aria-label="Good answer" style="width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid {{t.line}}; background: transparent; color: {{t.ink}}; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h6a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"></path></svg></button>
+            <button aria-label="Bad answer" style="width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid {{t.line}}; background: transparent; color: {{t.ink}}; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 13V4h3v9zM17 13l-4 8a2 2 0 0 1-2-2v-4H5a2 2 0 0 1-2-2l2-7a2 2 0 0 1 2-2h10"></path></svg></button>
+            <button aria-label="Edit answer" style="width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid {{t.line}}; background: transparent; color: {{t.ink}}; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path></svg></button>
+            <span style="margin-left: 6px; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}">6.7 TOK/S · 412 TOKENS</span>
+            <a href="BohoMemory.dc.html" style="margin-left: auto; display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px; background: {{t.ink}}; color: {{t.paper}}; text-decoration: none; font-size: 12px; font-weight: 600">1 memory update to review</a>
+          </div>
+        </article>
+      </section>
+
+      <!-- Composer band -->
+      <div style="background: {{t.paper}}; padding: 38px 26px 16px; display: flex; flex-direction: column; gap: 10px; clip-path: polygon(0 26px, 26% 26px, calc(26% + 26px) 0, calc(74% - 26px) 0, 74% 26px, 100% 26px, 100% calc(100% - 16px), calc(100% - 16px) 100%, 16px 100%, 0 calc(100% - 16px))">
+        <div style="display: flex; align-items: flex-end; gap: 12px">
+          <button aria-label="Attach a text file" style="flex: none; width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid {{t.line}}; background: transparent; color: {{t.ink}}; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"></path></svg></button>
+          <label for="boho-composer" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Message Democritus</label>
+          <textarea id="boho-composer" rows="2" placeholder="Write to Democritus…" style="flex: 1; min-width: 0; resize: none; background: transparent; border: none; border-bottom: 1px solid {{t.lineStrong}}; outline: none; color: {{t.ink}}; font-family: 'Italiana', serif; font-size: 22px; line-height: 1.4; padding: 0 0 6px"></textarea>
+          <button aria-label="Send" style="flex: none; width: 48px; height: 48px; display: grid; place-items: center; border: none; background: {{t.accent}}; color: {{t.accentInk}}; cursor: pointer; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 9px; font-weight: 700; letter-spacing: 1.3px; color: {{t.muted}}">
+          <span style="display: inline-flex; gap: 3px" aria-hidden="true"><span style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ink}}"></span><span style="width: 6px; height: 6px; border-radius: 50%; border: 1px solid {{t.ink}}; box-sizing: border-box"></span></span>
+          <span>RECALLING 3 MEMORIES</span>
+          <span style="margin-left: auto">ENTER · SEND</span><span>SHIFT+ENTER · NEW LINE</span><span>ESC · STOP</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: {{t.ink}}">16/10</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Continuity -->
+    <aside aria-label="Continuity" style="flex: 1 1 270px; max-width: 100%; box-sizing: border-box; background: {{t.paper}}; padding: 22px 20px; display: flex; flex-direction: column; gap: 22px; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px))">
+      <section style="display: flex; flex-direction: column; gap: 8px">
+        <h2 style="margin: 0; padding-bottom: 8px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">CURRENT STATE</h2>
+        <p style="margin: 0; font-family: 'Italiana', serif; font-size: 24px; line-height: 1.15">Writing path validation for memory updates</p>
+        <p style="margin: 0; font-size: 12px; color: {{t.muted}}">Next: wire it into the update applier and test a path that tries to escape.</p>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 8px">
+        <h2 style="margin: 0; padding-bottom: 8px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">PROJECT · 3 OF 6</h2>
+        <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <li style="display: flex; gap: 10px; color: {{t.muted}}"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">01</span><span style="text-decoration: line-through">Rename &amp; identity</span></li>
+          <li style="display: flex; gap: 10px; color: {{t.muted}}"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">02</span><span style="text-decoration: line-through">Model memory fix</span></li>
+          <li style="display: flex; gap: 10px; color: {{t.muted}}"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">03</span><span style="text-decoration: line-through">Safety rules</span></li>
+          <li style="display: flex; gap: 10px; font-weight: 700"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500">04</span>Home folder &amp; memory <span style="color: {{t.accent}}">✳</span></li>
+          <li style="display: flex; gap: 10px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">05</span>Continuity across brains</li>
+          <li style="display: flex; gap: 10px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">06</span>Improving over time</li>
+        </ol>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 8px">
+        <h2 style="margin: 0; padding-bottom: 8px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">IN MEMORY</h2>
+        <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 12px"><span>qwen3.8:27b</span><span>17.4 GB</span></div>
+        <div style="height: 8px; display: flex; border: 1px solid {{t.ink}}" aria-hidden="true"><span style="width: 34%; background: {{t.ink}}"></span><span style="width: 52%; background: repeating-linear-gradient(90deg, {{t.ink}} 0 2px, transparent 2px 5px)"></span></div>
+        <div style="display: flex; justify-content: space-between; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}"><span>GPU 6.0 GB</span><span>RAM 11.4 GB</span></div>
+        <div style="display: flex; align-items: center; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+          <span>qwen3.5:4b · helper</span>
+          <button style="height: 32px; padding: 0 10px; border: 1px solid {{t.ink}}; background: transparent; color: {{t.ink}}; font-size: 12px; cursor: pointer">Unload</button>
+        </div>
+      </section>
+
+      <div style="margin-top: auto; display: flex; align-items: center; justify-content: space-between; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: {{t.muted}}">
+        <span>RECALLED · 3 FILES</span>
+        <span style="display: inline-flex; gap: 3px" aria-hidden="true"><span style="width: 6px; height: 6px; border-radius: 50%; border: 1px solid {{t.ink}}; box-sizing: border-box"></span><span style="width: 6px; height: 6px; border-radius: 50%; background: {{t.ink}}"></span></span>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { brainOpen: false, thinkOpen: false, brainId: 'qwen3.8:27b' };
+  }
+  renderVals() {
+    const PAL = {
+      light: { paper: '#EDE6D6', paper2: '#F6F1E6', sel: '#DDD4BF', line: '#BEB49D', line2: '#D5CBB4', lineStrong: '#8F8672', muted: '#4F5870', ink: '#142347', onPhoto: '#F6EFE2', slip: 'rgba(15,26,58,0.74)', accent: '#E0823A', accentInk: '#142347', codeBg: '#142347', codeText: '#EDE6D6', codeMuted: '#9AACD0', codeKw: '#F4A261', codeLine: '#2A3B68' },
+      dark: { paper: '#17234B', paper2: '#1D2C5A', sel: '#283C72', line: '#3A4D82', line2: '#2C3E6C', lineStrong: '#6476A6', muted: '#AEBBD8', ink: '#F3EBDD', onPhoto: '#F6EFE2', slip: 'rgba(8,12,30,0.8)', accent: '#F2994A', accentInk: '#10183A', codeBg: '#0C1331', codeText: '#E8DFCC', codeMuted: '#8796BE', codeKw: '#F4A261', codeLine: '#24345F' }
+    };
+    const t = this.props.dark ? PAL.dark : PAL.light;
+    const list = [
+      { id: 'qwen3.5:4b', speed: '130 tok/s', note: 'Quick · memory helper' },
+      { id: 'qwen3.5:9b', speed: '87 tok/s', note: 'Everyday brain' },
+      { id: 'qwen3.8:27b', speed: '6.7 tok/s', note: 'Deepest · partly in RAM' },
+      { id: 'qwen3-coder', speed: '39 tok/s', note: 'Best for code' }
+    ];
+    const brain = list.find((m) => m.id === this.state.brainId) || list[2];
+    const models = list.map((m) => {
+      const on = m.id === this.state.brainId;
+      return {
+        ...m,
+        rowStyle: 'width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 6px 10px; border: none; cursor: pointer; text-align: left; ' + (on ? 'background: ' + t.ink + '; color: ' + t.paper + ';' : 'background: transparent; color: ' + t.ink + ';'),
+        noteStyle: 'font-size: 11px; color: ' + (on ? t.line2 : t.muted) + ';',
+        pick: () => this.setState({ brainId: m.id, brainOpen: false })
+      };
+    });
+    return {
+      t,
+      brain,
+      models,
+      brainOpen: this.state.brainOpen,
+      thinkOpen: this.state.thinkOpen,
+      thinkChevron: this.state.thinkOpen ? 'M6 9l6 6 6-6' : 'M9 6l6 6-6 6',
+      toggleBrain: () => this.setState({ brainOpen: !this.state.brainOpen }),
+      toggleThink: () => this.setState({ thinkOpen: !this.state.thinkOpen })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Democritus — Memory (bohemian)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Italiana&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#141A2E}
+a{color:inherit}a:hover{opacity:0.8}
+button{font-family:inherit}
+.dusk{background-color:#16203A;background-image:linear-gradient(180deg,rgba(10,14,30,0.15) 0%,rgba(10,14,30,0) 40%,rgba(10,10,14,0.35) 100%),url(/_blob/f63cb246dc2b263f8dee857c31ed5eaa);background-size:cover;background-position:center 72%}
+</style>
+</helmet>
+<div class="dusk" style="min-height: 900px; box-sizing: border-box; padding: 22px; display: flex; flex-direction: column; gap: 16px; font-family: 'Manrope', sans-serif; font-size: 14px; line-height: 1.5; color: {{t.ink}}">
+
+  <header style="position: relative; z-index: 1; padding: 16px 26px 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; gap: 16px">
+    <div aria-hidden="true" style="position: absolute; inset: 0; z-index: -1; background: {{t.paper}}; clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 70% 100%, calc(70% - 28px) calc(100% - 28px), calc(30% + 28px) calc(100% - 28px), 30% 100%, 0 100%, 0 18px)"></div>
+    <div style="display: flex; align-items: center; gap: 12px; min-width: 0">
+      <a href="BohoChat.dc.html" style="display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px 0 8px; border: 1px solid {{t.ink}}; text-decoration: none; font-size: 12px; font-weight: 600">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>Chat
+      </a>
+      <div style="display: flex; flex-direction: column; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; line-height: 1.3; color: {{t.muted}}">
+        <span style="color: {{t.ink}}">D:\DEMOCRITUS\MEMORY</span><span>14 FILES · 38 KB</span>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: center; gap: 14px">
+      <svg style="color: {{t.accent}}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+      <h1 style="margin: 0; font-family: 'Italiana', serif; font-weight: 400; font-size: 46px; letter-spacing: 3px; line-height: 1">MEMORY</h1>
+      <svg style="color: {{t.accent}}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"></path></svg>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px">
+      <label style="display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border: 1px solid {{t.line}}; font-size: 12px; cursor: pointer"><input type="checkbox" style="width: 16px; height: 16px; accent-color: {{t.ink}}">Auto-apply</label>
+      <button style="height: 40px; padding: 0 14px; border: 1px solid {{t.ink}}; background: transparent; color: {{t.ink}}; font-size: 12px; font-weight: 600; cursor: pointer">Pause memory</button>
+    </div>
+  </header>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; gap: 16px">
+
+    <nav aria-label="Memory files" style="flex: 1 1 230px; max-width: 100%; box-sizing: border-box; background: {{t.paper}}; padding: 20px 16px; display: flex; flex-direction: column; gap: 2px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px)">
+      <div style="padding: 0 6px 8px; margin-bottom: 6px; border-bottom: 1px solid {{t.line}}; font-family: 'Manrope', sans-serif; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">INDEX</div>
+      <a href="#" style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; text-decoration: none">identity.md</a>
+      <a href="#" style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; text-decoration: none">operator.md</a>
+      <a href="#" style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; text-decoration: none">current_state.md</a>
+      <a href="#" style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; text-decoration: none">index.md</a>
+      <span style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; color: {{t.muted}}">projects/</span>
+      <a href="#" style="display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 8px 0 22px; text-decoration: none; background: {{t.ink}}; color: {{t.paper}}">democritus.md<span style="font-size: 10px; color: {{t.accent}}">✳</span></a>
+      <a href="#" style="display: flex; align-items: center; min-height: 34px; padding: 0 8px 0 22px; text-decoration: none">greek-atomism.md</a>
+      <span style="display: flex; align-items: center; min-height: 34px; padding: 0 8px; color: {{t.muted}}">sessions/ · 8</span>
+    </nav>
+
+    <section aria-label="File" style="flex: 999 1 440px; min-width: 0; background: {{t.paper2}}; padding: 26px 36px; display: flex; flex-direction: column; gap: 14px; clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%)">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">
+        <span style="color: {{t.ink}}">PROJECTS / DEMOCRITUS.MD</span><span>EDITED BY YOU · 12 VERSIONS</span>
+        <button style="margin-left: auto; height: 32px; padding: 0 10px; border: 1px solid {{t.line}}; background: transparent; color: {{t.ink}}; font-size: 11px; cursor: pointer">History</button>
+      </div>
+      <h2 style="margin: 0; font-family: 'Italiana', serif; font-weight: 400; font-size: 36px; letter-spacing: 1px">Democritus</h2>
+      <p style="margin: 0; max-width: 60ch">A private desktop assistant. Qwen models are the brain; identity and memory live in this folder.</p>
+      <h3 style="margin: 10px 0 0; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">STATUS</h3>
+      <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px; font-size: 13px">
+        <li style="color: {{t.muted}}; text-decoration: line-through">01 · Rename &amp; identity</li>
+        <li style="font-weight: 700">04 · Home folder &amp; memory ✳</li>
+        <li style="color: {{t.muted}}; text-decoration: line-through">02 · Model memory fix</li>
+        <li>05 · Continuity across brains</li>
+        <li style="color: {{t.muted}}; text-decoration: line-through">03 · Safety rules</li>
+        <li>06 · Improving over time</li>
+      </ol>
+      <h3 style="margin: 10px 0 0; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">DECISIONS</h3>
+      <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px">
+        <li>Copy to D:\democritus-app; keep the original as backup</li>
+        <li>qwen3.5:4b writes memory updates, with a fallback</li>
+        <li>Fine-tuning: export data only, no downloads yet</li>
+      </ul>
+      <h3 style="margin: 10px 0 0; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">NEXT STEP</h3>
+      <p style="margin: 0; font-family: 'Italiana', serif; font-size: 22px">Path validation for memory updates.</p>
+    </section>
+
+    <aside aria-label="Proposed update" style="flex: 1 1 320px; max-width: 100%; box-sizing: border-box; background: {{t.paper}}; padding: 22px 20px; display: flex; flex-direction: column; gap: 14px; clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px))">
+      <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">
+        <span style="color: {{t.ink}}">PROPOSED UPDATE</span><span style="margin-left: auto">1 / 1</span>
+      </div>
+      <p style="margin: 0; font-size: 12px; color: {{t.muted}}">From “Memory folder — path validation”, written by qwen3.5:4b.</p>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.7; border: 1px solid {{t.line}}">
+        <div style="padding: 6px 10px; border-bottom: 1px solid {{t.line}}; color: {{t.muted}}">## Next step</div>
+        <div style="padding: 6px 10px; color: {{t.muted}}; text-decoration: line-through">− Path validation for memory updates.</div>
+        <div style="padding: 6px 10px; background: {{t.ink}}; color: {{t.paper}}">+ Wire validate_memory_path into the applier.</div>
+        <div style="padding: 6px 10px; background: {{t.ink}}; color: {{t.paper}}">+ Test a path that tries to escape memory\.</div>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+        <button style="flex: 1 1 auto; height: 44px; border: none; background: {{t.accent}}; color: {{t.accentInk}}; font-size: 13px; font-weight: 700; cursor: pointer">Apply</button>
+        <button style="flex: 1 1 auto; height: 44px; border: 1px solid {{t.ink}}; background: transparent; color: {{t.ink}}; font-size: 13px; cursor: pointer">Edit first</button>
+        <button style="flex: 1 1 auto; height: 44px; border: 1px solid {{t.ink}}; background: transparent; color: {{t.ink}}; font-size: 13px; cursor: pointer">Reject</button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px">
+        <div style="padding-bottom: 8px; border-bottom: 1px solid {{t.line}}; font-size: 9px; font-weight: 700; letter-spacing: 1.4px; color: {{t.muted}}">RECENT</div>
+        <div style="display: flex; justify-content: space-between; gap: 10px; font-size: 12px"><span>operator.md · short answers</span><span style="font-family: 'IBM Plex Mono', monospace; color: {{t.muted}}">18:42</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 10px; font-size: 12px"><span>current_state.md · new task</span><span style="font-family: 'IBM Plex Mono', monospace; color: {{t.muted}}">18:40</span></div>
+      </div>
+      <p style="margin: auto 0 0; font-size: 11px; color: {{t.muted}}">Updates write only inside the memory folder. Every change is versioned.</p>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const PAL = {
+      light: { paper: '#EDE6D6', paper2: '#F6F1E6', sel: '#DDD4BF', line: '#BEB49D', line2: '#D5CBB4', lineStrong: '#8F8672', muted: '#4F5870', ink: '#142347', onPhoto: '#F6EFE2', slip: 'rgba(15,26,58,0.74)', accent: '#E0823A', accentInk: '#142347', codeBg: '#142347', codeText: '#EDE6D6', codeMuted: '#9AACD0', codeKw: '#F4A261', codeLine: '#2A3B68' },
+      dark: { paper: '#17234B', paper2: '#1D2C5A', sel: '#283C72', line: '#3A4D82', line2: '#2C3E6C', lineStrong: '#6476A6', muted: '#AEBBD8', ink: '#F3EBDD', onPhoto: '#F6EFE2', slip: 'rgba(8,12,30,0.8)', accent: '#F2994A', accentInk: '#10183A', codeBg: '#0C1331', codeText: '#E8DFCC', codeMuted: '#8796BE', codeKw: '#F4A261', codeLine: '#24345F' }
+    };
+    return { t: this.props.dark ? PAL.dark : PAL.light };
+  }
+}
+</script>
+</body>
+</html>
