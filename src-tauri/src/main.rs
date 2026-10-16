@@ -18,6 +18,7 @@ mod safety_cmds;
 mod secrules;
 mod security;
 mod server;
+mod shutdown;
 mod sysmem;
 mod think;
 
@@ -607,6 +608,7 @@ fn main() {
             });
             let _ = app.state::<AppState>().app_handle.set(app.handle().clone());
             tauri::async_runtime::spawn(memcmds::worker(app.handle().clone()));
+            shutdown::start_watchdog(app.handle());
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -678,16 +680,20 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<AppState>() {
-                    // A firewall rule switched off for a pending download goes back on
-                    // now (the elevated helper also watches for this process to end).
-                    if let Some((_, gate)) = state.firewall_gate.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
-                        security::signal_gate_done(gate);
-                    }
-                    state.server.shutdown();
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => shutdown::cleanup(app, "normal exit"),
+            // Test hook (debug builds only): DEMOCRITUS_TEST_PREVENT_EXIT=once|always
+            // blocks Tauri's own exit, the way the shutdown hang did, so the
+            // watchdog in shutdown.rs can be tested on demand.
+            #[cfg(debug_assertions)]
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                static PREVENTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                match std::env::var("DEMOCRITUS_TEST_PREVENT_EXIT").as_deref() {
+                    Ok("always") => api.prevent_exit(),
+                    Ok("once") if !PREVENTED.swap(true, std::sync::atomic::Ordering::SeqCst) => api.prevent_exit(),
+                    _ => {}
                 }
             }
+            _ => {}
         });
 }

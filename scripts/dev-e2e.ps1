@@ -17,6 +17,10 @@ if ($RealHome) { Remove-Item Env:DEMOCRITUS_HOME -ErrorAction SilentlyContinue }
 # Same privacy flags as the real app (tauri.conf.json), plus the DevTools port.
 $conf = Get-Content (Join-Path $root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "$($conf.app.windows[0].additionalBrowserArgs) --remote-debugging-port=9222 $ExtraArgs".Trim()
+# Its own WebView2 profile: the real app's profile can't be shared while that app
+# runs with different browser flags (WebView2 fails with 0x8007139F), and test
+# browsing data stays out of the operator's profile.
+$env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $e2e 'webview'
 if ($Legacy) {
     $legacyDb = Join-Path $e2e 'legacy\local-qwen.db'
     New-Item -ItemType Directory -Force (Split-Path $legacyDb) | Out-Null

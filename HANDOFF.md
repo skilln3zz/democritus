@@ -207,11 +207,24 @@ Run on the PC (RTX 5070 12 GB, 32 GB RAM, Ollama 0.40.2) against the four real m
   - The second time, the first close request did nothing for over 30 s before the window went away.
   - Stacks (2026-10-17): the main thread sits idle in tao's event loop (`GetMessageW`), no windows remain, and the app's own `ollama serve` is still running, so `RunEvent::Exit` was never reached. This is not a deadlock in Democritus's code. `tauri-runtime-wry` 2.12.2 only requests exit when it handles the window's `Destroyed` event and finds no windows left, so look there: a slow WebView2 teardown, or a close that bypasses `Destroyed`.
   - Other closes exited in 0.2–0.8 s (six times). It seems to need a long session with the memory helper busy.
-  - A possible guard: on `WindowEvent::Destroyed` of the main window, call `app.exit(0)` explicitly.
+  - **Guarded since 2026-10-17** (`src-tauri/src/shutdown.rs`); the root cause in Tauri is still unknown:
+    - A watchdog thread checks once a second whether the main window still exists (`IsWindow`). Once it's gone, Tauri gets 3 s to exit by itself. Then the watchdog calls `app.exit(0)`, so the normal exit handler runs. If the process is still alive 5 s later, it does the same cleanup and ends the process.
+    - The cleanup (firewall rule back on, stop the app's own Ollama) is in `shutdown::cleanup` and runs only once, whoever calls it.
+    - Every exit logs "app exiting" with how (normal exit / stopped by the exit watchdog), and the watchdog logs "window closed but the app didn't exit; exiting now". The next hang leaves a trail in the Log page.
+    - The slow first close (30 s before the window went away) is not explained. Watch for it.
+  - **Tested** with the debug-build hook `DEMOCRITUS_TEST_PREVENT_EXIT=once|always`, which blocks Tauri's own exit the way the hang did:
+    - `once`: exited after 3.2 s through the normal handler.
+    - `always`: exited after 8.4–8.6 s through the watchdog, and the Ollama the app had started (on port 11435 for the test) was stopped.
+    - Normal close: 0.1 s.
+    - Closes after three long continuity runs: 0.1–0.4 s, all through the normal exit (the watchdog wasn't needed).
+- **One unexplained continuity run (2026-10-17, 01:06–01:09).** The 9B's code-word reply and the 4B's final shed-key reply came back empty, and the summary step failed, which gave 7/10.
+  - The shared Ollama log shows only HTTP 200 and no errors in that window.
+  - The two runs right after passed 10/10, with summaries working.
+  - That run's activity log was wiped by the next `-Fresh` start, so the summary error is unknown. It would be in the log as "summarizing failed; oldest messages left out".
+  - The streaming chat path wasn't changed that day, but the summary length cap was, so watch for a repeat.
 - **How Lockdown was interpreted:** Lockdown blocks all *internet* (non-loopback) access and pauses learning and memory writes. Chat with the local Ollama server on 127.0.0.1 still works. Confirm with the operator that this is what they want.
 - **Ollama's own model loading** can still fail transiently with a CUDA error right after a large model unloads, as seen in the first build. The app shows a "try sending again" message.
 - **Context window vs. VRAM.** The fit check (Step 4) estimates from file size and doesn't yet account for the context window. Measured footprints update on the next load. Step 6A should pick the window per model from the benchmark.
-- `cargo` reports 4 dead-code warnings for helpers reserved for Step 2 (`home::backups_dir`, `OperatorSettings::memory_writable`, and so on).
 - The end-to-end safety group assumes **fresh** test data. Launch with `-Fresh`.
 
 ## How to run and test
@@ -220,8 +233,11 @@ Run on the PC (RTX 5070 12 GB, 32 GB RAM, Ollama 0.40.2) against the four real m
 # Rust unit tests (offline)
 cd D:\democritus-app\src-tauri; cargo test --offline
 
-# Test-mode app: data in .e2e\ (gitignored), never the operator's real data or D:\Democritus
+# Test-mode app: data in .e2e\ (gitignored), never the operator's real data or D:\Democritus.
+# It has its own WebView2 profile (.e2e\webview), so it can run while the real app is open.
 powershell -ExecutionPolicy Bypass -File scripts\dev-e2e.ps1 -Fresh [-Legacy] [-ExtraArgs "..."]
+# Exit watchdog test (debug builds only): set this before launching, then close the window
+$env:DEMOCRITUS_TEST_PREVENT_EXIT = 'once'   # or 'always'
 
 # End-to-end tests drive the real window over WebView2's DevTools port 9222
 node scripts/e2e.mjs --only=safety                     # groups: chat, stop, ui, persisted, migration, identity, memory, safety
