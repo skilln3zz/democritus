@@ -15,6 +15,8 @@ mod memory;
 mod ollama;
 mod operator;
 mod safety_cmds;
+mod secrules;
+mod security;
 mod server;
 mod sysmem;
 mod think;
@@ -109,6 +111,9 @@ fn save_settings(state: State<AppState>, settings: db::Settings) -> CmdResult<db
     }
     if !(2048..=262_144).contains(&s.context_tokens) {
         return Err("The context window must be between 2048 and 262144 tokens.".into());
+    }
+    if !["system", "light", "dark"].contains(&s.theme.as_str()) {
+        return Err("The theme must be light, dark or system.".into());
     }
     s.server_command = s.server_command.trim().to_string();
     s.home_dir = s.home_dir.trim().to_string();
@@ -629,6 +634,8 @@ fn main() {
             safety_cmds::read_activity,
             safety_cmds::request_download,
             safety_cmds::respond_approval,
+            security::security_check,
+            security::security_fix,
             memcmds::memory_overview,
             memcmds::memory_read,
             memcmds::memory_write,

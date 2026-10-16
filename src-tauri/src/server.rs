@@ -196,7 +196,7 @@ fn host_port(base: &str) -> Option<String> {
 
 /// Finds a bare program name on PATH, falling back to Ollama's default install
 /// locations (GUI apps don't always inherit the shell's PATH).
-fn resolve_program(name: &str) -> PathBuf {
+pub(crate) fn resolve_program(name: &str) -> PathBuf {
     let given = PathBuf::from(name);
     if given.components().count() > 1 {
         return given;

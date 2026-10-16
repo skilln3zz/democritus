@@ -59,6 +59,8 @@ pub struct Settings {
     /// own limit. Bigger windows hold more history but need more RAM/VRAM
     /// (the KV cache grows with it), so the default stays modest.
     pub context_tokens: u32,
+    /// Appearance: "system" (follow Windows), "light" or "dark".
+    pub theme: String,
 }
 
 impl Default for Settings {
@@ -76,6 +78,7 @@ impl Default for Settings {
             memory_helper_model: "qwen3.5:4b".into(),
             active_project: String::new(),
             context_tokens: 8192,
+            theme: "system".into(),
         }
     }
 }

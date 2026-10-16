@@ -21,6 +21,13 @@ pub async fn is_ollama(http: &reqwest::Client, base: &str) -> bool {
     }
 }
 
+/// The server's version string (`/api/version`), or None if it isn't Ollama.
+pub async fn version(http: &reqwest::Client, base: &str) -> Option<String> {
+    let r = http.get(format!("{}/api/version", origin(base))).timeout(Duration::from_secs(2)).send().await.ok()?;
+    let v: Value = serde_json::from_slice(&r.bytes().await.ok()?).ok()?;
+    v["version"].as_str().map(String::from)
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadedModel {
