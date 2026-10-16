@@ -1,6 +1,7 @@
 //! Client for any OpenAI-compatible server on localhost (Ollama, llama-server,
-//! LM Studio, vLLM). Ollama's native `/api/tags` is used only to enrich the model
-//! list with sizes when it happens to be available.
+//! LM Studio, vLLM). With Ollama, chat uses its native `/api/chat` instead, which
+//! lets the app set the context window (`num_ctx`); `/api/tags` enriches the
+//! model list with sizes.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -109,6 +110,8 @@ pub enum Delta {
 pub enum SseLine {
     Ignore,
     Done,
+    /// Last line of a native Ollama stream, carrying usage and finish reason.
+    DoneWith(Vec<Delta>),
     Deltas(Vec<Delta>),
     Error(String),
 }
@@ -205,12 +208,44 @@ pub struct ChatRequest<'a> {
     pub messages: Vec<Value>,
     pub temperature: f64,
     pub max_tokens: u32,
+    /// Some(n): Ollama's native /api/chat with this context window. None: the
+    /// OpenAI-compatible endpoint with the server's own context setting.
+    pub num_ctx: Option<u32>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
     Finished,
     Cancelled,
+}
+
+/// Parses one line of Ollama's native NDJSON chat stream.
+pub fn parse_ndjson_line(line: &str) -> SseLine {
+    let line = line.trim();
+    if line.is_empty() {
+        return SseLine::Ignore;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return SseLine::Ignore;
+    };
+    if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
+        return SseLine::Error(error_text(err));
+    }
+    let mut out = Vec::new();
+    let msg = &v["message"];
+    if let Some(t) = msg["thinking"].as_str().filter(|s| !s.is_empty()) {
+        out.push(Delta::Reasoning(t.to_string()));
+    }
+    if let Some(c) = msg["content"].as_str().filter(|s| !s.is_empty()) {
+        out.push(Delta::Content(c.to_string()));
+    }
+    if v["done"].as_bool() == Some(true) {
+        out.push(Delta::Usage { prompt_tokens: v["prompt_eval_count"].as_u64(), completion_tokens: v["eval_count"].as_u64() });
+        // Same names as the OpenAI API, so "length" still shows the max-token badge.
+        out.push(Delta::Finish(v["done_reason"].as_str().unwrap_or("stop").to_string()));
+        return SseLine::DoneWith(out);
+    }
+    SseLine::Deltas(out)
 }
 
 /// Streams a chat completion, calling `on_delta` for every parsed delta.
@@ -222,16 +257,31 @@ pub async fn stream_chat(
     cancel: &Notify,
     mut on_delta: impl FnMut(Delta),
 ) -> Result<Outcome, String> {
-    let body = json!({
-        "model": req.model,
-        "messages": req.messages,
-        "stream": true,
-        "temperature": req.temperature,
-        "max_tokens": req.max_tokens,
-        "stream_options": { "include_usage": true },
-    });
+    let native = req.num_ctx.is_some();
+    let (url, body) = match req.num_ctx {
+        Some(num_ctx) => (
+            format!("{}/api/chat", server_origin(req.base)),
+            json!({
+                "model": req.model,
+                "messages": req.messages,
+                "stream": true,
+                "options": { "temperature": req.temperature, "num_predict": req.max_tokens, "num_ctx": num_ctx },
+            }),
+        ),
+        None => (
+            format!("{}/chat/completions", req.base),
+            json!({
+                "model": req.model,
+                "messages": req.messages,
+                "stream": true,
+                "temperature": req.temperature,
+                "max_tokens": req.max_tokens,
+                "stream_options": { "include_usage": true },
+            }),
+        ),
+    };
     let send = http
-        .post(format!("{}/chat/completions", req.base))
+        .post(url)
         .header("content-type", "application/json")
         .body(body.to_string())
         .send();
@@ -257,8 +307,14 @@ pub async fn stream_chat(
         // Lines end in '\n', which never occurs inside a UTF-8 multi-byte sequence.
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buf.drain(..=pos).collect();
-            match parse_sse_line(&String::from_utf8_lossy(&line)) {
+            let text = String::from_utf8_lossy(&line);
+            let parsed = if native { parse_ndjson_line(&text) } else { parse_sse_line(&text) };
+            match parsed {
                 SseLine::Done => return Ok(Outcome::Finished),
+                SseLine::DoneWith(deltas) => {
+                    deltas.into_iter().for_each(&mut on_delta);
+                    return Ok(Outcome::Finished);
+                }
                 SseLine::Deltas(deltas) => deltas.into_iter().for_each(&mut on_delta),
                 SseLine::Error(msg) => return Err(friendly_error(req.model, &msg)),
                 SseLine::Ignore => {}
@@ -303,6 +359,21 @@ mod tests {
         assert_eq!(parse_sse_line(": keep-alive"), SseLine::Ignore);
         let line = r#"data: {"error":{"message":"model requires more system memory (40 GiB) than is available (20 GiB)"}}"#;
         assert!(matches!(parse_sse_line(line), SseLine::Error(m) if m.contains("more system memory")));
+    }
+
+    #[test]
+    fn parses_ollama_native_stream() {
+        let line = r#"{"model":"qwen3.5:4b","message":{"role":"assistant","content":"","thinking":"Hmm"},"done":false}"#;
+        assert_eq!(parse_ndjson_line(line), SseLine::Deltas(vec![Delta::Reasoning("Hmm".into())]));
+        let line = r#"{"model":"qwen3.5:4b","message":{"role":"assistant","content":"Hi"},"done":false}"#;
+        assert_eq!(parse_ndjson_line(line), SseLine::Deltas(vec![Delta::Content("Hi".into())]));
+        let line = r#"{"model":"m","message":{"role":"assistant","content":""},"done":true,"done_reason":"length","prompt_eval_count":12,"eval_count":34}"#;
+        assert_eq!(
+            parse_ndjson_line(line),
+            SseLine::DoneWith(vec![Delta::Usage { prompt_tokens: Some(12), completion_tokens: Some(34) }, Delta::Finish("length".into())])
+        );
+        assert!(matches!(parse_ndjson_line(r#"{"error":"model requires more system memory"}"#), SseLine::Error(m) if m.contains("memory")));
+        assert_eq!(parse_ndjson_line(""), SseLine::Ignore);
     }
 
     #[test]

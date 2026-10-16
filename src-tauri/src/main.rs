@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod context;
 mod db;
 mod home;
 mod identity;
@@ -105,6 +106,9 @@ fn save_settings(state: State<AppState>, settings: db::Settings) -> CmdResult<db
     }
     if s.max_tokens == 0 || s.max_tokens > 262_144 {
         return Err("Max tokens must be between 1 and 262144.".into());
+    }
+    if !(2048..=262_144).contains(&s.context_tokens) {
+        return Err("The context window must be between 2048 and 262144 tokens.".into());
     }
     s.server_command = s.server_command.trim().to_string();
     s.home_dir = s.home_dir.trim().to_string();
@@ -245,6 +249,8 @@ struct SendRequest {
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum StreamEvent {
     Started { user_message: db::Message, assistant_message_id: i64 },
+    /// Progress before the first token (e.g. summarizing older messages).
+    Status { text: String },
     Reasoning { text: String },
     Content { text: String },
     Reclassify,
@@ -359,30 +365,137 @@ async fn send_message(state: State<'_, AppState>, req: SendRequest, on_event: Ch
     result
 }
 
+/// The context window to request for `model`: the operator's setting, capped at
+/// the model's own limit. None when the server isn't Ollama (the OpenAI-
+/// compatible endpoint can't set it). The memory helper uses the same value
+/// when it borrows the brain, so the loaded model is never reloaded.
+pub(crate) async fn chat_num_ctx(state: &AppState, model: &str) -> Option<u32> {
+    let base = state.settings().base_url;
+    if !ollama::is_ollama(&state.http, &base).await {
+        return None;
+    }
+    let want = state.settings().context_tokens;
+    let limit = ollama::context_limit(&state.http, &base, model).await.unwrap_or(u32::MAX);
+    Some(want.min(limit).max(2048))
+}
+
+const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}"#;
+
+/// Folds `turns` into the conversation's running summary with the current brain.
+async fn summarize(state: &AppState, model: &str, num_ctx: u32, previous: &str, turns: &[context::Turn]) -> CmdResult<String> {
+    let base = state.settings().base_url;
+    let max_chars = (num_ctx as usize * 3) * 6 / 10;
+    let messages = vec![json!({ "role": "user", "content": context::summary_prompt(previous, turns, max_chars) })];
+    state.log(
+        "network",
+        "local model request",
+        json!({ "url": format!("{}/api/chat", ollama::origin(&base)), "model": model, "purpose": "summarize older messages", "messages": turns.len() }),
+    );
+    let schema: Value = serde_json::from_str(SUMMARY_SCHEMA).expect("valid schema");
+    let v = ollama::chat_json(&state.http, &base, model, &messages, &schema, Some(num_ctx), "5m").await?;
+    let summary = v["summary"].as_str().unwrap_or_default().trim().to_string();
+    if summary.is_empty() {
+        return Err(format!("{model} returned an empty summary"));
+    }
+    Ok(summary)
+}
+
 async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event: &Channel<StreamEvent>) -> CmdResult<()> {
     let settings = state.settings();
-    let (user_message, assistant_id, history) = {
+    let (user_message, assistant_id, conv) = {
         let conn = state.db();
         let user_id = db::insert_message(&conn, req.conversation_id, "user", &req.content, &req.model, "complete").map_err(err)?;
         db::set_conversation_model(&conn, req.conversation_id, &req.model).map_err(err)?;
         db::touch_conversation(&conn, req.conversation_id).map_err(err)?;
-        let history = db::history(&conn, req.conversation_id).map_err(err)?;
         let assistant_id = db::insert_message(&conn, req.conversation_id, "assistant", "", &req.model, "streaming").map_err(err)?;
         let user_message = db::get_message(&conn, user_id).map_err(err)?.ok_or("The message could not be saved.")?;
-        (user_message, assistant_id, history)
+        let conv = db::get_conversation(&conn, req.conversation_id).map_err(err)?.ok_or("The conversation was deleted.")?;
+        (user_message, assistant_id, conv)
     };
     let user_message_id = user_message.id;
     let _ = on_event.send(StreamEvent::Started { user_message, assistant_message_id: assistant_id });
 
-    let mut messages = Vec::with_capacity(history.len() + 1);
-    messages.push(json!({ "role": "system", "content": identity::system_prompt(&req.model, &settings.system_prompt) }));
-    messages.extend(history.into_iter().map(|(role, content)| json!({ "role": role, "content": content })));
+    // ---- context: identity, memory, search results, summary, history ----
+    let num_ctx = chat_num_ctx(state, &req.model).await;
+    let window = num_ctx.unwrap_or(settings.context_tokens);
+    let core = identity::system_prompt(&req.model, &settings.system_prompt);
+    let project = if conv.project.is_empty() { settings.active_project.clone() } else { conv.project.clone() };
+    let memory = memcmds::context_memory(state, &project);
+    let query: String = req.content.chars().take(2000).collect();
+    let hits: Vec<context::SearchHit> = memcmds::search(state, &query, 6)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| context::SearchHit { path: h.path, heading: h.heading, text: h.text })
+        .collect();
+    let mut summary_failed = false;
+    let assembled = loop {
+        let (summary, upto) = db::get_summary(&state.db(), req.conversation_id).map_err(err)?;
+        let turns = db::history(&state.db(), req.conversation_id, upto).map_err(err)?;
+        let a = context::assemble(&context::Input {
+            core: &core,
+            model: &req.model,
+            memory: &memory,
+            hits: &hits,
+            summary: &summary,
+            turns: &turns,
+            num_ctx: window,
+            max_tokens: settings.max_tokens,
+        });
+        // Older messages don't fit: fold them into the summary with the current
+        // brain (Ollama only), then assemble again.
+        let (Some(n), Some(last), false) = (num_ctx, a.to_summarize.last(), summary_failed) else { break a };
+        let last_id = last.id;
+        let _ = on_event.send(StreamEvent::Status { text: format!("Summarizing {} older messages to fit the context window…", a.to_summarize.len()) });
+        let result = tokio::select! {
+            _ = cancel.notified() => None,
+            r = summarize(state, &req.model, n, &summary, &a.to_summarize) => Some(r),
+        };
+        match result {
+            None => {
+                let conn = state.db();
+                db::finish_message(&conn, assistant_id, "", "", "stopped", None, None).map_err(err)?;
+                if let Some(message) = db::get_message(&conn, assistant_id).map_err(err)? {
+                    let _ = on_event.send(StreamEvent::Done { message });
+                }
+                return Ok(());
+            }
+            Some(Ok(new_summary)) => {
+                db::set_summary(&state.db(), req.conversation_id, &new_summary, last_id).map_err(err)?;
+                state.log("memory", "older messages summarized", json!({ "conversation": req.conversation_id, "messages": a.to_summarize.len(), "upTo": last_id, "model": req.model }));
+            }
+            Some(Err(e)) => {
+                state.log("memory", "summarizing failed; oldest messages left out", json!({ "conversation": req.conversation_id, "error": e }));
+                summary_failed = true;
+            }
+        }
+    };
+    let report = assembled.report;
+    let mut messages = Vec::with_capacity(assembled.messages.len() + 1);
+    messages.push(json!({ "role": "system", "content": assembled.system }));
+    messages.extend(assembled.messages.into_iter().map(|(role, content)| json!({ "role": role, "content": content })));
 
+    let url = match num_ctx {
+        Some(_) => format!("{}/api/chat", ollama::origin(&settings.base_url)),
+        None => format!("{}/chat/completions", settings.base_url),
+    };
     state.log(
         "network",
         "local model request",
-        json!({ "url": format!("{}/chat/completions", settings.base_url), "model": req.model, "conversation": req.conversation_id, "messages": messages.len() }),
+        json!({
+            "url": url,
+            "model": req.model,
+            "conversation": req.conversation_id,
+            "messages": messages.len(),
+            "numCtx": num_ctx,
+            "memoryFiles": report.memory_files,
+            "searchHits": report.search_hits,
+            "estimatedPromptTokens": report.estimated_prompt_tokens,
+        }),
     );
+    if let Some(prev) = &report.switched_from {
+        state.log("model", "brain switch handoff", json!({ "conversation": req.conversation_id, "from": prev, "to": req.model }));
+    }
     let started = Instant::now();
     let mut acc = Accumulator::new(on_event);
     let request = llm::ChatRequest {
@@ -391,6 +504,7 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
         messages,
         temperature: settings.temperature,
         max_tokens: settings.max_tokens,
+        num_ctx,
     };
     let outcome = llm::stream_chat(&state.http, request, cancel, |d| acc.on_delta(d)).await;
     acc.flush();
@@ -400,7 +514,9 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
         Ok(llm::Outcome::Cancelled) => ("stopped", None),
         Err(e) => ("error", Some(e)),
     };
-    let stats = acc.stats(started).to_string();
+    let mut stats = acc.stats(started);
+    stats["context"] = serde_json::to_value(&report).map_err(err)?;
+    let stats = stats.to_string();
     let message = {
         let conn = state.db();
         db::finish_message(&conn, assistant_id, acc.content.trim(), acc.reasoning.trim(), status, error.as_deref(), Some(&stats))
@@ -531,6 +647,7 @@ fn main() {
             memcmds::create_project,
             memcmds::set_active_project,
             memcmds::reset_learning,
+            memcmds::last_time,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")

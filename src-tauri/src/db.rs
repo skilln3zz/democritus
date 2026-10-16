@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::context::Turn;
+
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -53,6 +55,9 @@ pub struct Settings {
     pub memory_helper_model: String,
     /// Active project (file stem in memory\projects\), '' for none.
     pub active_project: String,
+    /// Context window requested from Ollama (num_ctx), capped at each model's
+    /// own limit. Bigger windows hold more history but need more RAM/VRAM.
+    pub context_tokens: u32,
 }
 
 impl Default for Settings {
@@ -69,6 +74,7 @@ impl Default for Settings {
             home_dir: String::new(),
             memory_helper_model: "qwen3.5:4b".into(),
             active_project: String::new(),
+            context_tokens: 16384,
         }
     }
 }
@@ -175,6 +181,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              CREATE INDEX idx_memory_chunks_path ON memory_chunks(path);
              CREATE VIRTUAL TABLE memory_fts USING fts5(heading, text, chunk_id UNINDEXED);
              PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
+    if version < 4 {
+        conn.execute_batch(
+            "BEGIN;
+             -- Running summary of older messages that no longer fit the context
+             -- window, and the id of the last message it covers.
+             ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT '';
+             ALTER TABLE conversations ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0;
+             PRAGMA user_version = 4;
              COMMIT;",
         )?;
     }
@@ -338,16 +355,29 @@ pub fn finish_message(
     Ok(())
 }
 
-/// The turns to send back to the model. Reasoning is left out (Qwen's guidance),
-/// as are failed or empty replies.
-pub fn history(conn: &Connection, conversation_id: i64) -> rusqlite::Result<Vec<(String, String)>> {
+/// The turns to send back to the model, after message `after_id` (the end of
+/// the stored summary). Reasoning is left out (Qwen's guidance), as are failed
+/// or empty replies.
+pub fn history(conn: &Connection, conversation_id: i64, after_id: i64) -> rusqlite::Result<Vec<Turn>> {
     let mut stmt = conn.prepare(
-        "SELECT role, content FROM messages
-         WHERE conversation_id = ?1 AND status IN ('complete', 'stopped') AND content <> ''
+        "SELECT id, role, content, model FROM messages
+         WHERE conversation_id = ?1 AND id > ?2 AND status IN ('complete', 'stopped') AND content <> ''
          ORDER BY id",
     )?;
-    let rows = stmt.query_map(params![conversation_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt.query_map(params![conversation_id, after_id], |r| Ok(Turn { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, model: r.get(3)? }))?;
     rows.collect()
+}
+
+/// (summary, id of the last message it covers).
+pub fn get_summary(conn: &Connection, conversation_id: i64) -> rusqlite::Result<(String, i64)> {
+    conn.query_row("SELECT summary, summary_upto FROM conversations WHERE id = ?1", params![conversation_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .map(Option::unwrap_or_default)
+}
+
+pub fn set_summary(conn: &Connection, conversation_id: i64, summary: &str, upto: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE conversations SET summary = ?2, summary_upto = ?3 WHERE id = ?1", params![conversation_id, summary, upto])?;
+    Ok(())
 }
 
 pub fn get_settings(conn: &Connection) -> Settings {
@@ -408,8 +438,13 @@ mod tests {
         let ok = insert_message(&conn, c.id, "assistant", "", "m", "streaming").unwrap();
         finish_message(&conn, ok, "hello", "thinking...", "complete", None, Some(r#"{"completionTokens":3}"#)).unwrap();
 
-        let h = history(&conn, c.id).unwrap();
+        let h: Vec<(String, String)> = history(&conn, c.id, 0).unwrap().into_iter().map(|t| (t.role, t.content)).collect();
         assert_eq!(h, vec![("user".into(), "hi".into()), ("user".into(), "again".into()), ("assistant".into(), "hello".into())]);
+        // Messages covered by a summary are skipped.
+        let first = get_messages(&conn, c.id).unwrap()[0].id;
+        set_summary(&conn, c.id, "Said hi.", first).unwrap();
+        assert_eq!(get_summary(&conn, c.id).unwrap(), ("Said hi.".to_string(), first));
+        assert_eq!(history(&conn, c.id, first).unwrap().len(), 2);
         let saved = get_message(&conn, ok).unwrap().unwrap();
         assert_eq!(saved.reasoning, "thinking...");
         assert_eq!(saved.stats.unwrap()["completionTokens"], 3);

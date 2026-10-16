@@ -244,6 +244,15 @@ fn find_section(lines: &[String], heading: &str) -> Option<(usize, usize, usize)
     Some((start, end, level))
 }
 
+/// The text of one section, or None if it's missing, empty or still the
+/// template placeholder.
+pub fn section_body(text: &str, heading: &str) -> Option<String> {
+    let lines: Vec<String> = text.lines().map(String::from).collect();
+    let (start, end, _) = find_section(&lines, heading)?;
+    let body = lines[start + 1..end].join("\n").trim().to_string();
+    (!body.is_empty() && body != "None yet.").then_some(body)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Op {
@@ -576,6 +585,15 @@ mod tests {
         assert!(apply_op("# Existing\n", &op("create_file", None, "More")).unwrap().contains("# Existing\n\nMore"));
         assert!(apply_op(text, &op("delete_everything", None, "")).is_err());
         assert!(apply_op(text, &op("append", None, &"x".repeat(MAX_OP_CHARS + 1))).is_err());
+    }
+
+    #[test]
+    fn reads_one_section() {
+        let t = "# Current state\n\n## Active project\nNone yet.\n\n## Last task\nWrote the parser.\nAdded tests.\n\n## Next step\n";
+        assert_eq!(section_body(t, "Last task").as_deref(), Some("Wrote the parser.\nAdded tests."));
+        assert_eq!(section_body(t, "Active project"), None);
+        assert_eq!(section_body(t, "Next step"), None);
+        assert_eq!(section_body(t, "Missing"), None);
     }
 
     #[test]

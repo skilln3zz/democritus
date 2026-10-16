@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::memory::{self, Op};
-use crate::{db, home, localtime, memindex, ollama, AppState};
+use crate::{context, db, home, localtime, memindex, ollama, AppState};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -45,6 +45,27 @@ pub fn ensure_and_sync(state: &AppState) -> CmdResult<memindex::SyncReport> {
         state.log("memory", "file edited outside Democritus (your version is used)", json!({ "file": path }));
     }
     Ok(report)
+}
+
+/// The memory files every chat request carries: identity.md, operator.md,
+/// current_state.md and the active project's file, read fresh from disk so hand
+/// edits always win. Untouched templates are left out.
+pub fn context_memory(state: &AppState, project: &str) -> Vec<context::MemoryBlock> {
+    let mem = memory_dir(state);
+    if memory::ensure_structure(&mem).is_err() {
+        return Vec::new();
+    }
+    let mut files: Vec<String> = ["identity.md", "operator.md", "current_state.md"].map(String::from).to_vec();
+    if !project.is_empty() {
+        files.push(format!("projects/{project}.md"));
+    }
+    files
+        .into_iter()
+        .filter_map(|path| {
+            let text = memory::read(&mem, &path).ok()?;
+            context::is_meaningful(&text).then_some(context::MemoryBlock { path, text })
+        })
+        .collect()
 }
 
 // ---------- proposals in the database ----------
@@ -347,6 +368,17 @@ async fn process_job(state: &AppState, handle: &AppHandle, job: &Job) -> CmdResu
         }
         ModelChoice::Use { model, num_ctx, why } => (model, num_ctx, why),
     };
+    // A model that's already loaded keeps its current window (a different
+    // num_ctx would make Ollama reload it); the brain otherwise gets the same
+    // window the chat uses.
+    let keep_alive = if num_ctx.is_some() { "2m" } else { "5m" };
+    let num_ctx = match num_ctx {
+        Some(n) => Some(n),
+        None => match loaded_ctx(state, &model).await {
+            Some(n) => Some(n),
+            None => crate::chat_num_ctx(state, &model).await,
+        },
+    };
     set_status(&state.db(), job.id, "running", None).map_err(err)?;
     let mem = memory_dir(state);
     memory::ensure_structure(&mem).map_err(err)?;
@@ -354,7 +386,7 @@ async fn process_job(state: &AppState, handle: &AppHandle, job: &Job) -> CmdResu
     let messages = vec![json!({ "role": "system", "content": SYSTEM }), json!({ "role": "user", "content": build_prompt(&mem, &title, &active, &user_text, &answer) })];
     let base = state.settings().base_url;
     state.log("network", "local model request", json!({ "url": format!("{}/api/chat", ollama::origin(&base)), "model": model, "purpose": "memory proposal", "why": why }));
-    let raw = ollama::chat_json(&state.http, &base, &model, &messages, &schema(), num_ctx, if num_ctx.is_some() { "2m" } else { "5m" }).await?;
+    let raw = ollama::chat_json(&state.http, &base, &model, &messages, &schema(), num_ctx, keep_alive).await?;
 
     let existing: Vec<String> = memory::list(&mem).into_iter().map(|f| f.path).filter(|p| p.starts_with("projects/")).collect();
     let (ops, rejected, project, note) = validate_proposal(raw, &title, &localtime::now().date(), &existing);
@@ -375,6 +407,13 @@ async fn process_job(state: &AppState, handle: &AppHandle, job: &Job) -> CmdResu
     }
     let _ = handle.emit("memory-changed", json!({ "pending": pending_count(&state.db()) }));
     Ok(true)
+}
+
+/// The context window a loaded model is currently running with.
+async fn loaded_ctx(state: &AppState, model: &str) -> Option<u32> {
+    let base = state.settings().base_url;
+    let loaded = ollama::loaded(&state.http, &base).await.ok()?;
+    loaded.into_iter().find(|m| m.name == model)?.context_length.map(|n| n.min(u32::MAX as u64) as u32)
 }
 
 /// Background worker: processes queued jobs, keeps the search index in sync with
@@ -752,6 +791,37 @@ pub fn set_active_project(state: State<AppState>, slug: String, conversation_id:
         state.log("setting", "active project changed", json!({ "from": before, "to": slug, "conversation": conversation_id }));
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastTime {
+    project: String,
+    last_task: String,
+    next_step: String,
+    conversation_id: Option<i64>,
+    conversation_title: String,
+    updated_at: i64,
+}
+
+/// "Last time: …" for the start screen, from current_state.md and the most
+/// recent conversation. None when there's nothing to pick up yet.
+#[tauri::command]
+pub fn last_time(state: State<AppState>) -> CmdResult<Option<LastTime>> {
+    let mem = memory_dir(&state);
+    let text = memory::read(&mem, "current_state.md").unwrap_or_default();
+    let section = |h: &str| memory::section_body(&text, h).unwrap_or_default();
+    let last = db::list_conversations(&state.db(), None).map_err(err)?.into_iter().next();
+    let out = LastTime {
+        project: section("Active project"),
+        last_task: section("Last task"),
+        next_step: section("Next step"),
+        conversation_id: last.as_ref().map(|c| c.id),
+        conversation_title: last.as_ref().map(|c| c.title.clone()).unwrap_or_default(),
+        updated_at: last.as_ref().map(|c| c.updated_at).unwrap_or(0),
+    };
+    let empty = out.project.is_empty() && out.last_task.is_empty() && out.next_step.is_empty() && out.conversation_id.is_none();
+    Ok((!empty).then_some(out))
 }
 
 /// "Reset everything learned": backs up memory\ first, then starts fresh.

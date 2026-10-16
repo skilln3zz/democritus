@@ -198,6 +198,29 @@ pub async fn import_gguf(http: &reqwest::Client, base: &str, path: &std::path::P
     Ok(())
 }
 
+/// The longest context a model was trained for (`/api/show` model_info
+/// `<architecture>.context_length`), or None if the server doesn't say.
+pub async fn context_limit(http: &reqwest::Client, base: &str, model: &str) -> Option<u32> {
+    let resp = http
+        .post(format!("{}/api/show", origin(base)))
+        .header("content-type", "application/json")
+        .body(json!({ "model": model }).to_string())
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    let v: Value = serde_json::from_slice(&resp.bytes().await.ok()?).ok()?;
+    parse_context_limit(&v)
+}
+
+fn parse_context_limit(v: &Value) -> Option<u32> {
+    let info = v["model_info"].as_object()?;
+    let arch = info.get("general.architecture").and_then(Value::as_str);
+    let exact = arch.and_then(|a| info.get(&format!("{a}.context_length"))).and_then(Value::as_u64);
+    let any = || info.iter().find(|(k, _)| k.ends_with(".context_length")).and_then(|(_, v)| v.as_u64());
+    exact.or_else(any).map(|n| n.min(u32::MAX as u64) as u32)
+}
+
 /// Memory reserved for the OS and other apps when deciding whether a model fits.
 const RAM_MARGIN: u64 = 2 * 1024 * 1024 * 1024;
 const VRAM_MARGIN: u64 = 512 * 1024 * 1024;
@@ -257,6 +280,15 @@ mod tests {
 
     fn lm(name: &str, size: u64) -> LoadedModel {
         LoadedModel { name: name.into(), size_bytes: size, vram_bytes: 0, context_length: None, expires_at: None }
+    }
+
+    #[test]
+    fn reads_context_limit_from_api_show() {
+        let v = json!({ "model_info": { "general.architecture": "qwen3", "qwen3.context_length": 262144, "qwen3.embedding_length": 4096 } });
+        assert_eq!(parse_context_limit(&v), Some(262144));
+        let v = json!({ "model_info": { "qwen35moe.context_length": 32768 } });
+        assert_eq!(parse_context_limit(&v), Some(32768));
+        assert_eq!(parse_context_limit(&json!({})), None);
     }
 
     #[test]
