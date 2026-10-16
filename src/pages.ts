@@ -28,7 +28,7 @@ export function showPage(name: string) {
 }
 
 export function initRail() {
-  document.querySelectorAll<HTMLElement>('.rail-icon[data-icon]').forEach((el) => {
+  document.querySelectorAll<HTMLElement>('[data-icon]').forEach((el) => {
     el.innerHTML = (icons as Record<string, string>)[el.dataset.icon ?? ''] ?? '';
   });
   document.querySelectorAll<HTMLButtonElement>('.rail-btn[data-page]').forEach((b) =>

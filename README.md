@@ -9,11 +9,11 @@ Built with [Tauri 2](https://tauri.app): the backend is Rust, and the UI is plai
 - Streaming chat. Tokens appear as they're generated, and **Stop** (or <kbd>Esc</kbd>) cancels the reply.
 - A model picker that lists every model your server has, with parameter count, quantization and size.
 - Multiple conversations stored in SQLite. From the sidebar you can switch, rename (✎ or double-click), search (titles *and* message text) and delete them.
-- Qwen "thinking" output is shown in a collapsible section, separate from the answer. Both formats are handled: a separate `reasoning` / `reasoning_content` field (Ollama, llama-server, vLLM) and inline `<think>…</think>` tags.
+- Qwen "thinking" output is kept separate from the answer. By default it's hidden and the **ferrofluid orb** beside the reply shows it: its spikes follow the rate of incoming thinking tokens, and the reply says "Thought for X seconds · N thoughts" with a button to show them. Settings → Thinking display: Orb, Show thoughts or Both. Both formats are handled: a separate `reasoning` / `reasoning_content` field (Ollama, llama-server, vLLM) and inline `<think>…</think>` tags.
 - Markdown rendering, with syntax-highlighted code blocks and a **Copy** button on each one.
 - Drag text files into the window to include their contents in your message (up to 1 MB per file).
 - Settings for the system prompt, temperature, max tokens, server URL and server start command.
-- The "Bohemian dusk" look (design/UI-SPEC.md): cream paper panels over a dusk city photo. **Light, Dark or Follow system**, chosen under Settings & safety → Appearance and saved with the other settings.
+- The "Neumorphic off-white" look (design-neumorphic/NEU-SPEC.md): one warm off-white material, with raised cards and buttons, inset fields and selected rows, and a single terracotta accent. **Light, Dark (charcoal) or Follow system**, chosen under Settings & security → Appearance and saved with the other settings.
 - A **Security check** under Settings & safety: whether Ollama listens only on 127.0.0.1, whether `OLLAMA_HOST` is local, Windows Firewall outbound block rules for Democritus and Ollama, the Ollama version, Lockdown and download permission, and whether model files are only `.gguf` / `.safetensors`. Fix buttons show the exact PowerShell commands and run nothing until you confirm.
 - A server status indicator. The app starts the model server if it isn't running, and stops it on exit **only if the app started it**.
 - Clear error messages, e.g. when a model needs more memory than you have.
@@ -100,7 +100,7 @@ Deleting the database removes all conversations and settings.
 ## Privacy
 
 - The Rust HTTP client is compiled **without any TLS support** and ignores proxy settings, so it can't reach an `https://` endpoint. The server URL is also validated to be a loopback address.
-- All frontend libraries are bundled. There are no CDNs. The fonts (Italiana, Manrope, IBM Plex Mono, SIL Open Font License) come from the `@fontsource` npm packages and are bundled with the app. The Content Security Policy only allows Tauri's IPC: no external `connect-src`, and no remote images. Markdown images are disabled, and links in replies don't navigate anywhere.
+- All frontend libraries are bundled. There are no CDNs. The fonts (Fraunces, Figtree, IBM Plex Mono, SIL Open Font License) come from the `@fontsource` npm packages and are bundled with the app. The Content Security Policy only allows Tauri's IPC: no external `connect-src`, and no remote images. Markdown images are disabled, and links in replies don't navigate anywhere.
 
 ## Tests
 
@@ -138,8 +138,8 @@ src/                 UI (TypeScript, no framework)
   markdown.ts        markdown-it + highlight.js + DOMPurify
   theme.ts           Light / Dark / Follow system
   securitypage.ts    the Security check section
-  ornaments.ts       decorative SVGs (starbursts, dots, checker strip)
-  styles.css         theme tokens and layout (design/UI-SPEC.md)
+  orb.ts             the ferrofluid thinking orb (canvas)
+  styles.css         theme tokens, shadow recipes and layout (design-neumorphic/NEU-SPEC.md)
 src-tauri/src/
   main.rs            Tauri commands, streaming over an IPC channel, cancellation
   llm.rs             OpenAI-compatible client, SSE parsing, friendly errors
