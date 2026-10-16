@@ -1184,6 +1184,29 @@ dl.details dd {
   font-weight: 700;
 }
 
+/* ---------- brain switch divider ---------- */
+.brain-switch {
+  max-width: 820px;
+  margin: 4px auto 18px;
+  text-align: center;
+}
+.brain-switch-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.brain-switch-line::before,
+.brain-switch-line::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+.handoff-note {
+  margin-top: 4px;
+}
+
 /* ---------- empty state ---------- */
 .empty {
   max-width: 520px;
@@ -1197,6 +1220,23 @@ dl.details dd {
 .empty h1 {
   margin: 12px 0 6px;
   font-size: 22px;
+}
+.last-time {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 4px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-think);
+  font-size: 13px;
+  text-align: left;
+}
+.last-time-text {
+  align-self: stretch;
+  white-space: pre-wrap;
 }
 .hints {
   display: flex;

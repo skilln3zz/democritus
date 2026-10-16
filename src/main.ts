@@ -5,6 +5,7 @@ import {
   type LoadedModel,
   type Message,
   type ModelInfo,
+  type ContextReport,
   type ProjectInfo,
   type ServerStatus,
   type Settings,
@@ -51,6 +52,7 @@ const els = {
   setTemp: $<HTMLInputElement>('#set-temp'),
   setTempOut: $<HTMLOutputElement>('#set-temp-out'),
   setMax: $<HTMLInputElement>('#set-max'),
+  setCtx: $<HTMLInputElement>('#set-ctx'),
   setUrl: $<HTMLInputElement>('#set-url'),
   setCmd: $<HTMLInputElement>('#set-cmd'),
   setAutostart: $<HTMLInputElement>('#set-autostart'),
@@ -77,6 +79,8 @@ interface Generation {
   message: Message;
   el: HTMLElement | null;
   stopRequested: boolean;
+  /** Progress shown before the first token (e.g. "Summarizing…"). */
+  statusText: string;
   finished: Promise<void>;
   markFinished: () => void;
 }
@@ -490,7 +494,54 @@ function emptyState(): HTMLElement {
     `<ul class="hints"><li><kbd>Enter</kbd> send</li><li><kbd>Shift</kbd> + <kbd>Enter</kbd> new line</li>` +
     `<li><kbd>${modKey}</kbd> + <kbd>N</kbd> new chat</li><li><kbd>Esc</kbd> stop generating</li></ul>` +
     `<p class="muted small">Drop text files anywhere in the window to include them in your message.</p>`;
+  const last = document.createElement('div');
+  last.className = 'last-time';
+  last.hidden = true;
+  div.querySelector('h1')!.nextElementSibling!.after(last);
+  void fillLastTime(last);
   return div;
+}
+
+/** "Last time: …" from current_state.md and the most recent conversation. */
+async function fillLastTime(box: HTMLElement) {
+  const t = await api.lastTime().catch(() => null);
+  if (!t || !box.isConnected) return;
+  const what = t.lastTask || (t.conversationTitle ? `“${t.conversationTitle}”` : '');
+  const lines: string[] = [];
+  if (what) lines.push(`<div><strong>Last time:</strong> ${escapeText(what)}${t.updatedAt ? ` <span class="muted small">(${relativeTime(t.updatedAt)})</span>` : ''}</div>`);
+  if (t.project) lines.push(`<div><strong>Project:</strong> ${escapeText(t.project)}</div>`);
+  if (t.nextStep) lines.push(`<div><strong>Next:</strong> ${escapeText(t.nextStep)}</div>`);
+  if (!lines.length) return;
+  const open = t.conversationId !== null ? `<button type="button" class="btn small" data-open="${t.conversationId}">Continue “${escapeText(t.conversationTitle)}”</button>` : '';
+  box.innerHTML = `<div class="last-time-text">${lines.join('')}</div>${open}`;
+  box.querySelector<HTMLButtonElement>('[data-open]')?.addEventListener('click', () => void openConversation(t.conversationId!));
+  box.hidden = false;
+}
+
+// ---------- brain switches ----------
+
+function handoffText(c: ContextReport | undefined): string {
+  if (!c) return 'Same conversation, same memory: Democritus carries on with the new brain.';
+  const parts = [`${c.historyTurns} recent message${c.historyTurns === 1 ? '' : 's'}${c.hasSummary ? ' plus a summary of earlier ones' : ''}`];
+  if (c.memoryFiles.length) parts.push(`memory: ${c.memoryFiles.join(', ')}`);
+  if (c.searchHits) parts.push(`${c.searchHits} related note${c.searchHits === 1 ? '' : 's'}`);
+  return `Handed over: ${parts.join('; ')}.`;
+}
+
+/** Divider shown above the first reply after a brain switch. */
+function switchEl(from: string, m: Message): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'brain-switch';
+  el.dataset.for = String(m.id);
+  el.innerHTML = `<div class="brain-switch-line"><span>Brain switched to <strong>${escapeText(m.model)}</strong> <span class="muted">(was ${escapeText(from)})</span></span></div><div class="handoff-note muted small"></div>`;
+  el.querySelector('.handoff-note')!.textContent = handoffText(m.stats?.context);
+  return el;
+}
+
+/** The brain of the last reply before index `i` (or before the end). */
+function previousBrain(messages: Message[], i = messages.length): string {
+  for (let k = i - 1; k >= 0; k--) if (messages[k].role === 'assistant' && messages[k].model) return messages[k].model;
+  return '';
 }
 
 function renderMessages() {
@@ -499,13 +550,19 @@ function renderMessages() {
     els.messages.replaceChildren(emptyState());
     return;
   }
-  const items = state.messages.map((m, i) => {
+  const items: HTMLElement[] = [];
+  let brain = '';
+  state.messages.forEach((m, i) => {
     // While a reply streams, the saved copy is a stale placeholder: show the live one.
     const live = g && g.message.id === m.id ? g.message : m;
     state.messages[i] = live;
+    if (live.role === 'assistant' && live.model) {
+      if (brain && live.model !== brain) items.push(switchEl(brain, live));
+      brain = live.model;
+    }
     const el = messageEl(live);
     if (g && live === g.message) g.el = el;
-    return el;
+    items.push(el);
   });
   els.messages.replaceChildren(...items);
   scrollToBottom();
@@ -551,7 +608,12 @@ function updateMessageEl(el: HTMLElement, m: Message) {
 
   const waiting = streaming && !content && !reasoning;
   body.hidden = !content && !waiting;
-  body.innerHTML = content ? renderMarkdown(content) : waiting ? '<span class="typing"><i></i><i></i><i></i></span>' : '';
+  const status = state.generation?.message === m ? state.generation.statusText : '';
+  body.innerHTML = content
+    ? renderMarkdown(content)
+    : waiting
+      ? `<span class="typing"><i></i><i></i><i></i></span>${status ? ` <span class="muted small">${escapeText(status)}</span>` : ''}`
+      : '';
 
   const errorBox = el.querySelector<HTMLElement>('.error-box')!;
   errorBox.hidden = !m.error;
@@ -570,8 +632,18 @@ function footerHtml(m: Message): string {
   if (m.stats?.finishReason === 'length') bits.push('<span class="badge warn">Hit max-token limit</span>');
   if (m.stats?.tokensPerSecond) bits.push(`<span>${m.stats.tokensPerSecond} tok/s</span>`);
   if (m.stats?.completionTokens) bits.push(`<span>${m.stats.completionTokens} tokens</span>`);
+  const c = m.stats?.context;
+  if (c) {
+    if (c.omittedTurns) bits.push(`<span class="badge warn" title="Summarizing failed, so the oldest messages weren't sent">${c.omittedTurns} older messages left out</span>`);
+    const tip = [handoffText(c), c.clipped ? 'Some text was shortened to fit.' : ''].filter(Boolean).join(' ');
+    bits.push(`<span title="${escapeText(tip)}">~${kTokens(c.estimatedPromptTokens)} / ${kTokens(c.numCtx)} context</span>`);
+  }
   if (m.content.trim()) bits.push(`<button type="button" class="link-btn copy-message">${icons.copy}Copy</button>`);
   return bits.join('<span class="sep">·</span>');
+}
+
+function kTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 }
 
 // Streaming re-renders are throttled to keep long replies smooth.
@@ -677,6 +749,7 @@ async function send() {
     },
     el: null,
     stopRequested: false,
+    statusText: '',
     finished,
     markFinished,
   };
@@ -720,13 +793,20 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       m.id = ev.assistantMessageId;
       if (state.currentId !== g.conversationId) break;
       if (state.messages.length === 0) els.messages.replaceChildren();
+      const before = previousBrain(state.messages);
       state.messages.push(ev.userMessage, m);
       const userEl = messageEl(ev.userMessage);
       g.el = messageEl(m);
-      els.messages.append(userEl, g.el);
+      els.messages.append(userEl);
+      if (before && before !== m.model) els.messages.append(switchEl(before, m));
+      els.messages.append(g.el);
       scrollToBottom();
       break;
     }
+    case 'status':
+      g.statusText = ev.text;
+      scheduleLive();
+      break;
     case 'reasoning':
       m.reasoning += ev.text;
       scheduleLive();
@@ -742,6 +822,9 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       break;
     case 'done': {
       Object.assign(m, ev.message);
+      g.statusText = '';
+      const note = document.querySelector(`.brain-switch[data-for="${m.id}"] .handoff-note`);
+      if (note) note.textContent = handoffText(m.stats?.context);
       if (g.el?.isConnected) {
         const stick = nearBottom();
         updateMessageEl(g.el, m);
@@ -836,6 +919,7 @@ function openSettings() {
   els.setTemp.value = String(s.temperature);
   els.setTempOut.textContent = s.temperature.toFixed(2);
   els.setMax.value = String(s.maxTokens);
+  els.setCtx.value = String(s.contextTokens);
   els.setUrl.value = s.baseUrl;
   els.setCmd.value = s.serverCommand;
   els.setAutostart.checked = s.autoStartServer;
@@ -861,11 +945,18 @@ async function saveSettings(e: SubmitEvent) {
     els.settingsError.hidden = false;
     return;
   }
+  const contextTokens = Number(els.setCtx.value);
+  if (!Number.isInteger(contextTokens) || contextTokens < 2048 || contextTokens > 262144) {
+    els.settingsError.textContent = 'The context window must be a whole number between 2048 and 262144.';
+    els.settingsError.hidden = false;
+    return;
+  }
   const next: Settings = {
     ...current,
     systemPrompt: els.setSystem.value,
     temperature: Number(els.setTemp.value),
     maxTokens,
+    contextTokens,
     baseUrl: els.setUrl.value,
     serverCommand: els.setCmd.value,
     autoStartServer: els.setAutostart.checked,

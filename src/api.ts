@@ -12,6 +12,7 @@ export interface Settings {
   homeDir: string;
   memoryHelperModel: string;
   activeProject: string;
+  contextTokens: number;
 }
 
 export interface ModelInfo {
@@ -44,6 +45,29 @@ export interface MessageStats {
   completionTokens?: number;
   tokensPerSecond?: number;
   finishReason?: string;
+  context?: ContextReport;
+}
+
+/** What went into a request (saved with each reply). */
+export interface ContextReport {
+  numCtx: number;
+  estimatedPromptTokens: number;
+  memoryFiles: string[];
+  searchHits: number;
+  historyTurns: number;
+  hasSummary: boolean;
+  omittedTurns: number;
+  clipped: boolean;
+  switchedFrom: string | null;
+}
+
+export interface LastTime {
+  project: string;
+  lastTask: string;
+  nextStep: string;
+  conversationId: number | null;
+  conversationTitle: string;
+  updatedAt: number;
 }
 
 export interface Message {
@@ -61,6 +85,7 @@ export interface Message {
 
 export type StreamEvent =
   | { type: 'started'; userMessage: Message; assistantMessageId: number }
+  | { type: 'status'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'content'; text: string }
   | { type: 'reclassify' }
@@ -261,6 +286,7 @@ export const api = {
   createProject: (name: string) => invoke<string>('create_project', { name }),
   setActiveProject: (slug: string, conversationId: number | null) => invoke<void>('set_active_project', { slug, conversationId }),
   resetLearning: () => invoke<string>('reset_learning'),
+  lastTime: () => invoke<LastTime | null>('last_time'),
   getOperator: () => invoke<OperatorSettings>('get_operator'),
   saveOperator: (settings: OperatorSettings) => invoke<OperatorSettings>('save_operator', { settings }),
   setLockdown: (on: boolean) => invoke<OperatorSettings>('set_lockdown', { on }),

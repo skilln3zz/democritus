@@ -201,8 +201,12 @@
             <span>Max tokens</span>
             <input id="set-max" type="number" min="1" max="262144" step="1" />
           </label>
+          <label class="field">
+            <span>Context window</span>
+            <input id="set-ctx" type="number" min="2048" max="262144" step="1024" />
+          </label>
         </div>
-        <p class="muted small">Thinking tokens count toward the max-token limit. If a reply stops mid-thought, raise it.</p>
+        <p class="muted small">Thinking tokens count toward the max-token limit. If a reply stops mid-thought, raise it. The context window holds memory and the conversation; older messages are summarized when it fills up. A bigger window needs more RAM/VRAM.</p>
         <fieldset>
           <legend>Model server</legend>
           <label class="field">
