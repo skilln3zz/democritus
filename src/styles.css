@@ -353,6 +353,188 @@ section.page {
 .kind-memory {
   background: color-mix(in srgb, var(--ok) 20%, transparent);
 }
+.rail-btn {
+  position: relative;
+}
+.rail-badge {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 17px;
+}
+.inline-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+#project-select {
+  max-width: 200px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elev);
+  cursor: pointer;
+}
+
+/* ---------- memory page ---------- */
+.mem-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+  padding: 4px 28px 8px;
+}
+.mem-files {
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  padding: 6px;
+}
+.mem-group {
+  padding: 8px 8px 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.mem-file {
+  display: grid;
+  width: 100%;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.mem-file:hover {
+  background: var(--bg-hover);
+}
+.mem-file.active {
+  background: var(--bg-active);
+}
+.mem-file-name {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.mem-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.mem-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+#mem-text {
+  flex: 1;
+  min-height: 200px;
+  padding: 12px 14px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+}
+.mem-history {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.mem-snap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.mem-semantic {
+  padding: 4px 28px 14px;
+}
+.mem-proposals {
+  max-height: 46vh;
+  overflow-y: auto;
+  margin: 0 28px 10px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elev));
+}
+.proposal {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.proposal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.op-list {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.op-row code {
+  font-size: 12px;
+}
+.diff-file {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.diff-name {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.diff-line {
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-add {
+  background: var(--hl-add-bg);
+}
+.diff-del {
+  background: var(--hl-del-bg);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+.diff-gap {
+  color: var(--text-muted);
+}
+
 dl.details {
   display: grid;
   grid-template-columns: max-content 1fr;

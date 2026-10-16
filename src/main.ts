@@ -5,6 +5,7 @@ import {
   type LoadedModel,
   type Message,
   type ModelInfo,
+  type ProjectInfo,
   type ServerStatus,
   type Settings,
   type StreamEvent,
@@ -12,9 +13,11 @@ import {
 import { renderMarkdown } from './markdown';
 import { icons, logo } from './icons';
 import { initLogPage } from './logpage';
+import { listen } from '@tauri-apps/api/event';
+import { initMemoryPage } from './memorypage';
 import { initOperatorPage, loadOperator } from './operatorpage';
 import { initRail, showPage } from './pages';
-import { $, askConfirm, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
+import { $, askConfirm, askText, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
 
 const isMac = navigator.userAgent.includes('Mac');
 const modKey = isMac ? '⌘' : 'Ctrl';
@@ -52,6 +55,8 @@ const els = {
   setCmd: $<HTMLInputElement>('#set-cmd'),
   setAutostart: $<HTMLInputElement>('#set-autostart'),
   setHome: $<HTMLInputElement>('#set-home'),
+  setHelper: $<HTMLSelectElement>('#set-helper'),
+  projectSelect: $<HTMLSelectElement>('#project-select'),
   confirmDialog: $<HTMLDialogElement>('#confirm-dialog'),
   confirmText: $('#confirm-text'),
   confirmActions: $('#confirm-actions'),
@@ -283,7 +288,8 @@ function modelLabel(m: ModelInfo): string {
 
 async function loadModels() {
   try {
-    state.models = await api.listModels();
+    // Embedding models (used for memory search) can't chat, so they're not brains.
+    state.models = (await api.listModels()).filter((m) => !/embed/i.test(m.id));
   } catch (e) {
     state.models = [];
     if (state.server?.state === 'connected') toast(errorText(e), 'error');
@@ -304,6 +310,50 @@ function renderModels() {
   for (const m of state.models) sel.add(new Option(modelLabel(m), m.id));
   const conv = state.conversations.find((c) => c.id === state.currentId);
   selectModel(conv?.model || previous || state.settings?.defaultModel);
+}
+
+// ---------- projects ----------
+
+let projects: ProjectInfo[] = [];
+
+async function loadProjects() {
+  projects = await api.listProjects().catch(() => []);
+  renderProjects();
+}
+
+function renderProjects() {
+  const sel = els.projectSelect;
+  sel.replaceChildren(new Option('No project', ''), ...projects.map((p) => new Option(p.title, p.slug)), new Option('+ New project…', '__new__'));
+  const conv = state.conversations.find((c) => c.id === state.currentId);
+  const want = state.currentId !== null ? (conv?.project ?? '') : (state.settings?.activeProject ?? '');
+  sel.value = projects.some((p) => p.slug === want) ? want : '';
+}
+
+async function chooseProject() {
+  let slug = els.projectSelect.value;
+  if (slug === '__new__') {
+    const name = await askText('Project name', 'e.g. Garden planner');
+    if (!name) {
+      renderProjects();
+      return;
+    }
+    try {
+      slug = await api.createProject(name);
+    } catch (e) {
+      toast(errorText(e), 'error');
+      renderProjects();
+      return;
+    }
+  }
+  try {
+    await api.setActiveProject(slug, state.currentId);
+    if (state.settings) state.settings.activeProject = slug;
+    await refreshConversations();
+    await loadProjects();
+    toast(slug ? `Working on ${projects.find((p) => p.slug === slug)?.title ?? slug}` : 'No active project');
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
 }
 
 function selectModel(id?: string | null) {
@@ -406,6 +456,7 @@ async function deleteConversation(id: number) {
 function newChat() {
   state.currentId = null;
   state.messages = [];
+  renderProjects();
   renderMessages();
   renderConversations();
   selectModel(state.settings?.defaultModel);
@@ -423,6 +474,7 @@ async function openConversation(id: number) {
   const conv = state.conversations.find((c) => c.id === id);
   if (conv?.model) selectModel(conv.model);
   renderConversations();
+  renderProjects();
   renderMessages();
   els.input.focus();
 }
@@ -788,6 +840,11 @@ function openSettings() {
   els.setCmd.value = s.serverCommand;
   els.setAutostart.checked = s.autoStartServer;
   els.setHome.value = s.homeDir;
+  els.setHelper.replaceChildren(
+    new Option('Use the current brain', ''),
+    ...state.models.filter((m) => !m.id.includes('embedding')).map((m) => new Option(m.id, m.id)),
+  );
+  els.setHelper.value = s.memoryHelperModel;
   void api.appPaths().then((p) => (els.setHome.placeholder = p.home));
   els.settingsError.hidden = true;
   els.settingsDialog.showModal();
@@ -813,6 +870,7 @@ async function saveSettings(e: SubmitEvent) {
     serverCommand: els.setCmd.value,
     autoStartServer: els.setAutostart.checked,
     homeDir: els.setHome.value.trim(),
+    memoryHelperModel: els.setHelper.value,
   };
   try {
     state.settings = await api.saveSettings(next);
@@ -969,6 +1027,10 @@ async function init() {
   initRail();
   initLogPage();
   initOperatorPage();
+  initMemoryPage();
+  // A proposal may have created a project; keep the dropdown current.
+  void listen('memory-changed', () => void loadProjects());
+  els.projectSelect.addEventListener('change', () => void chooseProject());
   void loadOperator().catch((e) => toast(`Couldn't load operator settings: ${errorText(e)}`, 'error'));
   els.newChat.innerHTML = `${icons.plus}<span>New chat</span>`;
   els.newChat.title = `New chat (${modKey}+N)`;
@@ -985,6 +1047,7 @@ async function init() {
   renderMessages();
   renderAttachments();
   await refreshConversations();
+  void loadProjects();
   void pollStatus();
   els.input.focus();
 }

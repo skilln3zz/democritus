@@ -8,6 +8,9 @@ mod identity;
 mod internet;
 mod llm;
 mod localtime;
+mod memcmds;
+mod memindex;
+mod memory;
 mod ollama;
 mod operator;
 mod safety_cmds;
@@ -42,6 +45,8 @@ pub struct AppState {
     download_cancel: Notify,
     /// Mirror of the Lockdown setting, checked on hot paths.
     lockdown: std::sync::atomic::AtomicBool,
+    /// Wakes the background memory worker.
+    memory_notify: Notify,
 }
 
 impl AppState {
@@ -196,7 +201,15 @@ fn list_conversations(state: State<AppState>, query: Option<String>) -> CmdResul
 
 #[tauri::command]
 fn create_conversation(state: State<AppState>, title: String, model: String) -> CmdResult<db::Conversation> {
-    db::create_conversation(&state.db(), &clean_title(&title), &model).map_err(err)
+    let conn = state.db();
+    let conv = db::create_conversation(&conn, &clean_title(&title), &model).map_err(err)?;
+    // New chats belong to the active project, if one is set.
+    let active = db::get_settings(&conn).active_project;
+    if active.is_empty() {
+        return Ok(conv);
+    }
+    db::set_conversation_project(&conn, conv.id, &active).map_err(err)?;
+    Ok(db::Conversation { project: active, ..conv })
 }
 
 #[tauri::command]
@@ -358,6 +371,7 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
         let user_message = db::get_message(&conn, user_id).map_err(err)?.ok_or("The message could not be saved.")?;
         (user_message, assistant_id, history)
     };
+    let user_message_id = user_message.id;
     let _ = on_event.send(StreamEvent::Started { user_message, assistant_message_id: assistant_id });
 
     let mut messages = Vec::with_capacity(history.len() + 1);
@@ -396,7 +410,12 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
     };
     // None means the conversation was deleted mid-stream; nothing left to show.
     if let Some(message) = message {
+        let completed = message.status == "complete";
         let _ = on_event.send(StreamEvent::Done { message });
+        // Learn from the exchange in the background (skipped while memory is paused or locked down).
+        if completed {
+            memcmds::enqueue(state, req.conversation_id, user_message_id, assistant_id);
+        }
     }
     Ok(())
 }
@@ -453,7 +472,9 @@ fn main() {
                 approvals: operator::Approvals::default(),
                 download_cancel: Notify::new(),
                 lockdown: std::sync::atomic::AtomicBool::new(lockdown),
+                memory_notify: Notify::new(),
             });
+            tauri::async_runtime::spawn(memcmds::worker(app.handle().clone()));
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -492,6 +513,24 @@ fn main() {
             safety_cmds::read_activity,
             safety_cmds::request_download,
             safety_cmds::respond_approval,
+            memcmds::memory_overview,
+            memcmds::memory_read,
+            memcmds::memory_write,
+            memcmds::memory_delete,
+            memcmds::memory_history,
+            memcmds::memory_snapshot,
+            memcmds::memory_restore,
+            memcmds::memory_search,
+            memcmds::memory_proposals,
+            memcmds::memory_preview,
+            memcmds::memory_apply,
+            memcmds::memory_reject,
+            memcmds::memory_kick,
+            memcmds::memory_install_semantic,
+            memcmds::list_projects,
+            memcmds::create_project,
+            memcmds::set_active_project,
+            memcmds::reset_learning,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")

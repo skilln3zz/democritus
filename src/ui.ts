@@ -82,6 +82,28 @@ export function choose(text: string, choices: Choice[]): Promise<string> {
   return new Promise((resolve) => dialog.addEventListener('close', () => resolve(dialog.returnValue || 'cancel'), { once: true }));
 }
 
+/** Asks for a short line of text; resolves null on cancel. */
+export function askText(label: string, placeholder = ''): Promise<string | null> {
+  let dialog = document.querySelector<HTMLDialogElement>('#prompt-dialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'prompt-dialog';
+    dialog.innerHTML =
+      '<form method="dialog"><label class="field"><span id="prompt-label"></span><input id="prompt-input" type="text" autocomplete="off" /></label>' +
+      '<div class="dialog-actions"><button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button><button class="btn primary" value="ok" type="submit">OK</button></div></form>';
+    document.body.append(dialog);
+  }
+  const d = dialog;
+  $('#prompt-label').textContent = label;
+  const input = $<HTMLInputElement>('#prompt-input');
+  input.value = '';
+  input.placeholder = placeholder;
+  d.returnValue = '';
+  d.showModal();
+  input.focus();
+  return new Promise((resolve) => d.addEventListener('close', () => resolve(d.returnValue === 'ok' && input.value.trim() ? input.value.trim() : null), { once: true }));
+}
+
 export async function askConfirm(text: string, action = 'Delete'): Promise<boolean> {
   const c = await choose(text, [
     { value: 'cancel', label: 'Cancel' },

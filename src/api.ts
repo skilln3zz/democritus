@@ -10,6 +10,8 @@ export interface Settings {
   maxTokens: number;
   defaultModel: string;
   homeDir: string;
+  memoryHelperModel: string;
+  activeProject: string;
 }
 
 export interface ModelInfo {
@@ -32,6 +34,7 @@ export interface Conversation {
   model: string;
   createdAt: number;
   updatedAt: number;
+  project: string;
 }
 
 export interface MessageStats {
@@ -140,6 +143,76 @@ export type ApprovalOutcome =
   | { type: 'needsApproval'; approval: Approval }
   | { type: 'downloaded'; result: DownloadResult };
 
+export interface MemoryFile {
+  path: string;
+  title: string;
+  description: string;
+  size: number;
+  modifiedMs: number;
+  core: boolean;
+}
+
+export interface MemoryOverview {
+  memoryDir: string;
+  files: MemoryFile[];
+  paused: boolean;
+  lockdown: boolean;
+  autoApply: boolean;
+  pending: number;
+  queued: number;
+  semanticInstalled: boolean;
+  semanticFileDownloaded: boolean;
+  chunks: number;
+  embeddedChunks: number;
+  activeProject: string;
+  helperModel: string;
+}
+
+export interface MemoryHit {
+  path: string;
+  heading: string;
+  text: string;
+  score: number;
+}
+
+export interface Snapshot {
+  id: string;
+  time: string;
+  size: number;
+}
+
+export interface MemoryOp {
+  file: string;
+  section: string | null;
+  action: string;
+  content: string;
+}
+
+export interface Proposal {
+  id: number;
+  conversationId: number | null;
+  conversationTitle: string;
+  status: string;
+  model: string;
+  ops: MemoryOp[];
+  rejected: { op: MemoryOp; reason: string }[];
+  project: string;
+  note: string;
+  error: string | null;
+  createdAt: number;
+}
+
+export interface FilePreview {
+  path: string;
+  before: string;
+  after: string;
+}
+
+export interface ProjectInfo {
+  slug: string;
+  title: string;
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -170,6 +243,24 @@ export const api = {
   },
   stopGeneration: (requestId: string) => invoke<void>('stop_generation', { requestId }),
   appPaths: () => invoke<AppPaths>('app_paths'),
+  memoryOverview: () => invoke<MemoryOverview>('memory_overview'),
+  memoryRead: (path: string) => invoke<string>('memory_read', { path }),
+  memoryWrite: (path: string, content: string) => invoke<void>('memory_write', { path, content }),
+  memoryDelete: (path: string) => invoke<void>('memory_delete', { path }),
+  memoryHistory: (path: string) => invoke<Snapshot[]>('memory_history', { path }),
+  memorySnapshot: (path: string, id: string) => invoke<string>('memory_snapshot', { path, id }),
+  memoryRestore: (path: string, id: string) => invoke<void>('memory_restore', { path, id }),
+  memorySearch: (query: string) => invoke<MemoryHit[]>('memory_search', { query }),
+  memoryProposals: (status: string) => invoke<Proposal[]>('memory_proposals', { status: status || null }),
+  memoryPreview: (id: number) => invoke<FilePreview[]>('memory_preview', { id }),
+  memoryApply: (id: number, selected: number[] | null) => invoke<number>('memory_apply', { id, selected }),
+  memoryReject: (id: number) => invoke<void>('memory_reject', { id }),
+  memoryKick: () => invoke<void>('memory_kick'),
+  memoryInstallSemantic: () => invoke<void>('memory_install_semantic'),
+  listProjects: () => invoke<ProjectInfo[]>('list_projects'),
+  createProject: (name: string) => invoke<string>('create_project', { name }),
+  setActiveProject: (slug: string, conversationId: number | null) => invoke<void>('set_active_project', { slug, conversationId }),
+  resetLearning: () => invoke<string>('reset_learning'),
   getOperator: () => invoke<OperatorSettings>('get_operator'),
   saveOperator: (settings: OperatorSettings) => invoke<OperatorSettings>('save_operator', { settings }),
   setLockdown: (on: boolean) => invoke<OperatorSettings>('set_lockdown', { on }),

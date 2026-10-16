@@ -11,7 +11,7 @@
 //
 // Options: --port=9222  --models=a,b  --only=chat,stop,ui,persisted  --shots=<dir>
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const args = Object.fromEntries(
@@ -563,6 +563,171 @@ async function testSafety(cdp, fast) {
   await cdp.eval(`document.querySelector('.rail-btn[data-page=chat]').click()`);
 }
 
+async function testMemorySystem(cdp) {
+  const { readFileSync, writeFileSync, existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const call = (cmd, a = {}) => cdp.eval(invoke(cmd, a));
+  const tryCall = (cmd, a = {}) => cdp.eval(`${invoke(cmd, a)}.then(v => ({ ok: true, v }), e => ({ ok: false, e: String(e) }))`);
+  const setOp = async (patch) => {
+    const o = await call('get_operator');
+    await call('save_operator', { settings: { ...o, ...patch } });
+  };
+  // Waits for the newest proposal created after `afterId` to leave queued/running.
+  const waitProposal = async (afterId, timeoutMs = 600_000) => {
+    await call('memory_kick');
+    return waitFor(
+      cdp,
+      `${invoke('memory_proposals', { status: null })}.then(l => l.find(p => p.id > ${afterId} && !['queued', 'running'].includes(p.status)) ?? null)`,
+      timeoutMs,
+      'memory proposal',
+    );
+  };
+  const lastProposalId = async () => Math.max(0, ...(await call('memory_proposals', { status: null })).map((p) => p.id));
+  const exchange = async (model, text) => {
+    await newChat(cdp);
+    await selectModel(cdp, model);
+    await typeAndSend(cdp, text);
+    return awaitReply(cdp, 900_000);
+  };
+
+  // Layout.
+  const o = await call('memory_overview');
+  const mem = o.memoryDir;
+  report(
+    'memory: home folder layout created',
+    ['identity.md', 'operator.md', 'current_state.md', 'index.md'].every((f) => o.files.some((x) => x.path === f)) && existsSync(join(mem, 'projects')) && existsSync(join(mem, 'sessions')),
+    `${mem}: ${o.files.map((f) => f.path).join(', ')}`,
+  );
+
+  // A real exchange with the 9B brain; the 4B helper proposes updates.
+  let before = await lastProposalId();
+  await exchange('qwen3.5:9b', "I'm starting a new project called Garden Planner: a small desktop app to plan raised vegetable beds. I always prefer metric units. The next step is to sketch the bed layout. Just acknowledge briefly.");
+  let p = await waitProposal(before);
+  const files = [...new Set(p.ops.map((x) => x.file))];
+  const loadedAfter = (await call('loaded_models')).map((m) => m.name);
+  report(
+    'memory: helper model proposes updates after an exchange',
+    p.status === 'pending' && files.includes('current_state.md') && files.some((f) => f.startsWith('projects/')),
+    `status=${p.status}, written by ${p.model}, project="${p.project}", files: ${files.join(', ')}, rejected: ${p.rejected.length}; loaded now: ${loadedAfter.join(', ')}`,
+  );
+  const badge = await cdp.eval(`document.querySelector('#memory-badge').hidden ? 0 : Number(document.querySelector('#memory-badge').textContent)`);
+  report('memory: pending updates badge on the rail', badge >= 1, `badge=${badge}`);
+
+  // Review panel with diffs; apply.
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=memory]').click()`);
+  await waitFor(cdp, `document.querySelector('#mem-proposals .proposal [data-apply]')`, 15_000, 'review panel');
+  const diffs = await cdp.eval(`({ add: document.querySelectorAll('#mem-proposals .diff-add').length, files: [...document.querySelectorAll('#mem-proposals .diff-name')].map(e => e.textContent) })`);
+  await screenshot(cdp, 'memory-review');
+  report('memory: review panel shows a diff per file', diffs.add > 0 && diffs.files.length > 0, JSON.stringify(diffs));
+  await cdp.eval(`document.querySelector('#mem-proposals [data-apply="${p.id}"]').click()`);
+  await waitFor(cdp, `${invoke('memory_proposals', { status: null })}.then(l => l.find(x => x.id === ${p.id})?.status.startsWith('applied'))`, 15_000, 'applied');
+  const projectFile = p.ops.find((x) => x.file.startsWith('projects/'))?.file;
+  const state = readFileSync(join(mem, 'current_state.md'), 'utf8');
+  const proj = projectFile ? readFileSync(join(mem, ...projectFile.split('/')), 'utf8') : '';
+  const convs = await call('list_conversations', { query: null });
+  const projects = await call('list_projects');
+  report(
+    'memory: applying writes the files, links the conversation and lists the project',
+    state !== '' && proj.length > 0 && convs.some((c) => c.project === p.project) && projects.some((x) => x.slug === p.project),
+    `current_state.md: "${state.replace(/\s+/g, ' ').slice(0, 160)}" | ${projectFile} ${proj.length} bytes | projects: ${projects.map((x) => x.title).join(', ')}`,
+  );
+  const session = readdirSafe(join(mem, 'sessions'));
+  report('memory: session note written for today', session.length === 1, session.join(', '));
+  await screenshot(cdp, 'memory-page');
+
+  // Hand edit wins and is detected.
+  writeFileSync(join(mem, 'operator.md'), '# Operator\n\nPreferences and facts about the operator.\n\n## Preferences\n- Prefers metric units.\n- Likes concise answers with bullet points.\n\n## Facts\n- Grows tomatoes and zucchini on a balcony in Vienna.\n');
+  await call('memory_kick');
+  await sleep(1500);
+  const read = await call('memory_read', { path: 'operator.md' });
+  const ext = await waitFor(cdp, `${invoke('read_activity', { limit: 50, kind: 'memory', query: 'outside' })}.then(l => l.length ? l[0].detail.file : null)`, 40_000, 'hand-edit log entry');
+  report('memory: hand edits are used and logged', read.includes('Vienna') && ext === 'operator.md', `logged: ${ext}`);
+
+  // Keyword and meaning search.
+  const kw = await call('memory_search', { query: 'zucchini balcony' });
+  await waitFor(cdp, `${invoke('memory_overview')}.then(o => o.semanticInstalled && o.embeddedChunks === o.chunks && o.chunks > 0)`, 120_000, 'all chunks embedded');
+  const meaning = await call('memory_search', { query: 'Where does the operator live, and what do they grow?' });
+  report('memory: keyword search', kw[0]?.path === 'operator.md', kw.slice(0, 3).map((h) => `${h.path}›${h.heading}`).join(', '));
+  report('memory: meaning search finds related notes without shared words', meaning.slice(0, 3).some((h) => h.path === 'operator.md' && /Vienna/.test(h.text)), meaning.slice(0, 3).map((h) => `${h.path}›${h.heading}`).join(', '));
+
+  // History and undo.
+  const hist = await call('memory_history', { path: 'current_state.md' });
+  const oldest = hist[hist.length - 1];
+  await call('memory_restore', { path: 'current_state.md', id: oldest.id });
+  const restored = readFileSync(join(mem, 'current_state.md'), 'utf8');
+  const hist2 = await call('memory_history', { path: 'current_state.md' });
+  await call('memory_restore', { path: 'current_state.md', id: hist2[0].id }); // undo the undo
+  report('memory: history and undo', hist.length >= 1 && restored.includes('None yet.') && readFileSync(join(mem, 'current_state.md'), 'utf8') === state, `${hist.length} earlier version(s); restore and re-restore round-trip ok`);
+
+  // The app refuses paths outside memory\ and deleting core files.
+  const escape = await tryCall('memory_write', { path: '../../escape.md', content: 'x' });
+  const abs = await tryCall('memory_write', { path: 'C:\\Users\\Public\\x.md', content: 'x' });
+  const del = await tryCall('memory_delete', { path: 'identity.md' });
+  report('memory: writes outside memory\\ and deleting core files are refused', !escape.ok && !abs.ok && !del.ok, `${escape.e} | ${abs.e} | ${del.e}`);
+
+  // Reject: files stay unchanged.
+  before = await lastProposalId();
+  await exchange('qwen3.5:9b', 'For Garden Planner, we decided to use SQLite for storage. Next step: design the database tables. Acknowledge briefly.');
+  p = await waitProposal(before);
+  const snapshotBefore = readFileSync(join(mem, 'current_state.md'), 'utf8');
+  if (p.status === 'pending') await call('memory_reject', { id: p.id });
+  report('memory: rejecting leaves memory unchanged', readFileSync(join(mem, 'current_state.md'), 'utf8') === snapshotBefore, `proposal ${p.id} ${p.status} → rejected`);
+
+  // Pause: no proposal is queued.
+  await setOp({ memoryPaused: true });
+  before = await lastProposalId();
+  await exchange('qwen3.5:4b', 'Remember that my favourite colour is green. Acknowledge briefly.');
+  await sleep(3000);
+  report('memory: Pause memory stops proposals', (await lastProposalId()) === before, 'no job queued while paused');
+  await setOp({ memoryPaused: false });
+
+  // Auto-apply.
+  await setOp({ autoApplyMemory: true });
+  before = await lastProposalId();
+  await exchange('qwen3.5:9b', 'Garden Planner update: the bed layout sketch is done. Next step is choosing the plant list. Acknowledge briefly.');
+  p = await waitProposal(before);
+  report('memory: auto-apply applies without review', p.status.startsWith('applied') || p.status === 'empty', `status=${p.status}, by ${p.model}`);
+  await setOp({ autoApplyMemory: false });
+
+  // Lockdown blocks applying.
+  before = await lastProposalId();
+  await exchange('qwen3.5:9b', 'Garden Planner: we will also track watering schedules. Acknowledge briefly.');
+  p = await waitProposal(before);
+  await setOp({ lockdown: true });
+  const blocked = p.status === 'pending' ? await tryCall('memory_apply', { id: p.id, selected: null }) : { ok: false, e: `(proposal was ${p.status})` };
+  await setOp({ lockdown: false });
+  if (p.status === 'pending') await call('memory_reject', { id: p.id });
+  report('memory: Lockdown blocks memory writes', !blocked.ok && /paused|Lockdown/i.test(blocked.e), blocked.e);
+
+  // Fallback rule: the 27B brain leaves no room for the 4B helper.
+  before = await lastProposalId();
+  await exchange('qwen3.8:27b', 'Garden Planner: add a note that we want a printable PDF export later. One short sentence, please.');
+  p = await waitProposal(before, 1_200_000);
+  report('memory: helper fallback with a large brain', ['pending', 'empty', 'applied'].includes(p.status), `written by ${p.model} (helper qwen3.5:4b); ${p.note || ''}`);
+  if (p.status === 'pending') await call('memory_reject', { id: p.id });
+
+  // Reset everything learned (with backup).
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=memory]').click()`);
+  await waitFor(cdp, `document.querySelector('#mem-reset')`, 5000, 'reset button');
+  await cdp.eval(`document.querySelector('#mem-reset').click()`);
+  await waitFor(cdp, `document.querySelector('#confirm-dialog').open`, 5000, 'reset confirmation');
+  await screenshot(cdp, 'memory-reset-confirm');
+  await cdp.eval(`document.querySelector('#confirm-dialog button[value=ok]').click()`);
+  await waitFor(cdp, `${invoke('memory_overview')}.then(o => !o.files.some(f => f.path.startsWith('projects/')))`, 15_000, 'reset done');
+  const backups = readdirSafe(join(mem, '..', 'backups'));
+  const backupHasProject = backups.length > 0 && existsSync(join(mem, '..', 'backups', backups[backups.length - 1], projectFile ?? 'x'));
+  report('memory: reset backs up first, then starts fresh', backupHasProject && readFileSync(join(mem, 'operator.md'), 'utf8').includes('## Preferences\n\n'), `backup: ${backups.join(', ')}`);
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=chat]').click()`);
+}
+
+function readdirSafe(dir) {
+  try {
+    return readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
+
 // A real, operator-approved download through the UI (both approval dialogs).
 async function testDownload(cdp, url) {
   const activity = (kind) => cdp.eval(invoke('read_activity', { limit: 300, kind, query: null }));
@@ -676,6 +841,7 @@ try {
   if (ONLY.has('memory')) await testModelMemory(cdp).catch((e) => report('memory', false, e.message));
   if (ONLY.has('safety')) await testSafety(cdp, fast).catch((e) => report('safety', false, e.message));
   if (ONLY.has('download')) await testDownload(cdp, args.url).catch((e) => report('download', false, e.message));
+  if (ONLY.has('mem')) await testMemorySystem(cdp).catch((e) => report('mem', false, e.message));
   if (ONLY.has('persisted')) await testPersisted(cdp);
   if (ONLY.has('chat')) {
     for (const m of models) {

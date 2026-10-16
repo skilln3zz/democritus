@@ -18,6 +18,7 @@ pub struct Conversation {
     pub model: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub project: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +49,10 @@ pub struct Settings {
     pub default_model: String,
     /// Democritus's home folder; empty means the default (D:\Democritus).
     pub home_dir: String,
+    /// Small model that writes memory-update proposals in the background.
+    pub memory_helper_model: String,
+    /// Active project (file stem in memory\projects\), '' for none.
+    pub active_project: String,
 }
 
 impl Default for Settings {
@@ -62,6 +67,8 @@ impl Default for Settings {
             max_tokens: 8192,
             default_model: String::new(),
             home_dir: String::new(),
+            memory_helper_model: "qwen3.5:4b".into(),
+            active_project: String::new(),
         }
     }
 }
@@ -132,7 +139,61 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 3 {
+        conn.execute_batch(
+            "BEGIN;
+             -- Project a conversation belongs to (memory\\projects\\<slug>.md), '' for none.
+             ALTER TABLE conversations ADD COLUMN project TEXT NOT NULL DEFAULT '';
+             -- Background memory-update jobs and their proposals.
+             -- status: queued | running | pending (awaiting review) | applied | rejected | empty | failed
+             CREATE TABLE memory_proposals (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 conversation_id INTEGER,
+                 user_message_id INTEGER,
+                 assistant_message_id INTEGER,
+                 status TEXT NOT NULL,
+                 model TEXT NOT NULL DEFAULT '',
+                 ops TEXT NOT NULL DEFAULT '[]',
+                 rejected TEXT NOT NULL DEFAULT '[]',
+                 project TEXT NOT NULL DEFAULT '',
+                 note TEXT NOT NULL DEFAULT '',
+                 error TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX idx_memory_proposals_status ON memory_proposals(status);
+             -- Search index derived from the memory files (rebuildable).
+             CREATE TABLE memory_files (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, size INTEGER NOT NULL, app_mtime INTEGER);
+             CREATE TABLE memory_chunks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path TEXT NOT NULL,
+                 heading TEXT NOT NULL,
+                 text TEXT NOT NULL,
+                 embedding BLOB,
+                 embed_model TEXT
+             );
+             CREATE INDEX idx_memory_chunks_path ON memory_chunks(path);
+             CREATE VIRTUAL TABLE memory_fts USING fts5(heading, text, chunk_id UNINDEXED);
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+pub fn migrate_for_tests(conn: &Connection) {
+    migrate(conn).unwrap();
+}
+
+/// A fresh, unique temp folder per test (tests run in parallel).
+#[cfg(test)]
+pub fn test_dir(name: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let d = std::env::temp_dir().join(format!("democritus-test-{name}-{}-{}-{}", std::process::id(), now_ms(), N.fetch_add(1, Ordering::SeqCst)));
+    std::fs::create_dir_all(&d).unwrap();
+    d
 }
 
 pub fn record_model_memory(conn: &Connection, model: &str, loaded_bytes: u64, vram_bytes: u64, context_length: Option<u64>) -> rusqlite::Result<()> {
@@ -152,7 +213,7 @@ pub fn model_memory(conn: &Connection, model: &str) -> rusqlite::Result<Option<u
 }
 
 fn conversation_from_row(r: &Row) -> rusqlite::Result<Conversation> {
-    Ok(Conversation { id: r.get(0)?, title: r.get(1)?, model: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
+    Ok(Conversation { id: r.get(0)?, title: r.get(1)?, model: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)?, project: r.get(5)? })
 }
 
 const MESSAGE_COLUMNS: &str = "id, conversation_id, role, content, reasoning, model, status, error, stats, created_at";
@@ -181,7 +242,7 @@ fn escape_like(s: &str) -> String {
 pub fn list_conversations(conn: &Connection, query: Option<&str>) -> rusqlite::Result<Vec<Conversation>> {
     let pattern = query.map(str::trim).filter(|q| !q.is_empty()).map(|q| format!("%{}%", escape_like(q)));
     let mut stmt = conn.prepare(
-        "SELECT id, title, model, created_at, updated_at FROM conversations c
+        "SELECT id, title, model, created_at, updated_at, project FROM conversations c
          WHERE ?1 IS NULL
             OR c.title LIKE ?1 ESCAPE '\\'
             OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.content LIKE ?1 ESCAPE '\\')
@@ -193,7 +254,7 @@ pub fn list_conversations(conn: &Connection, query: Option<&str>) -> rusqlite::R
 
 pub fn get_conversation(conn: &Connection, id: i64) -> rusqlite::Result<Option<Conversation>> {
     conn.query_row(
-        "SELECT id, title, model, created_at, updated_at FROM conversations WHERE id = ?1",
+        "SELECT id, title, model, created_at, updated_at, project FROM conversations WHERE id = ?1",
         params![id],
         conversation_from_row,
     )
@@ -222,6 +283,11 @@ pub fn delete_conversation(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 
 pub fn set_conversation_model(conn: &Connection, id: i64, model: &str) -> rusqlite::Result<()> {
     conn.execute("UPDATE conversations SET model = ?2 WHERE id = ?1", params![id, model])?;
+    Ok(())
+}
+
+pub fn set_conversation_project(conn: &Connection, id: i64, project: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE conversations SET project = ?2 WHERE id = ?1", params![id, project])?;
     Ok(())
 }
 
@@ -351,7 +417,7 @@ mod tests {
 
     #[test]
     fn legacy_database_is_copied_once_and_left_untouched() {
-        let dir = std::env::temp_dir().join(format!("democritus-migrate-{}", now_ms()));
+        let dir = test_dir("migrate");
         std::fs::create_dir_all(&dir).unwrap();
         let legacy = dir.join("local-qwen.db");
         let new = dir.join("democritus.db");

@@ -57,6 +57,8 @@ pub fn now() -> LocalTime {
 }
 
 /// UTC breakdown of a Unix timestamp (Howard Hinnant's civil-from-days).
+/// Used on non-Windows platforms (and in tests).
+#[cfg_attr(windows, allow(dead_code))]
 pub fn from_unix(secs: i64) -> LocalTime {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);

@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn writes_and_reads_newest_first_with_filters() {
-        let dir = std::env::temp_dir().join(format!("democritus-activity-{}", db::now_ms()));
+        let dir = db::test_dir("activity");
         let log = ActivityLog::new(dir.clone());
         log.log("setting", "changed", json!({"field": "temperature", "from": 0.7, "to": 0.5}));
         log.log("network", "request", json!({"url": "http://127.0.0.1:11434/v1/chat/completions"}));

@@ -10,6 +10,7 @@
     <div id="app">
       <nav id="rail" aria-label="Pages">
         <button class="rail-btn active" type="button" data-page="chat"><span class="rail-icon" data-icon="chat"></span><span>Chat</span></button>
+        <button class="rail-btn" type="button" data-page="memory"><span class="rail-icon" data-icon="brain"></span><span>Memory</span><span id="memory-badge" class="rail-badge" hidden></span></button>
         <button class="rail-btn" type="button" data-page="log"><span class="rail-icon" data-icon="log"></span><span>Log</span></button>
         <button class="rail-btn" type="button" data-page="operator"><span class="rail-icon" data-icon="shield"></span><span>Operator</span></button>
         <div class="rail-spacer"></div>
@@ -34,6 +35,10 @@
             <label for="model-select" class="muted small">Model</label>
             <select id="model-select"></select>
             <button id="refresh-models" class="icon-btn" type="button" title="Refresh model list"></button>
+          </div>
+          <div class="model-picker">
+            <label for="project-select" class="muted small">Project</label>
+            <select id="project-select"></select>
           </div>
           <div class="loaded-wrap">
             <button id="loaded-btn" class="pill" type="button" title="Models currently in memory" hidden></button>
@@ -68,6 +73,38 @@
 
         <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
       </main>
+
+      <section id="page-memory" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Memory</h1>
+            <p class="muted small">Plain Markdown files in <code id="mem-path"></code>. Edit them here or in any editor; Democritus always uses the version on disk. Every change is kept in the history, so it can be undone.</p>
+          </div>
+        </header>
+        <div class="page-tools">
+          <input id="mem-search" type="search" placeholder="Search memory…" spellcheck="false" />
+          <label class="inline-switch"><input id="mem-pause" type="checkbox" class="switch" /><span>Pause memory</span></label>
+          <span id="mem-status" class="muted small"></span>
+          <div class="spacer"></div>
+          <button id="mem-reset" class="btn small" type="button">Reset everything learned…</button>
+        </div>
+        <div id="mem-proposals" class="mem-proposals" hidden></div>
+        <div class="mem-layout">
+          <aside id="mem-files" class="mem-files"></aside>
+          <div class="mem-editor">
+            <div class="mem-editor-head">
+              <div><strong id="mem-file-title"></strong> <span id="mem-file-path" class="muted small"></span></div>
+              <div class="spacer"></div>
+              <button id="mem-history-btn" class="btn small" type="button">History</button>
+              <button id="mem-delete" class="btn small" type="button">Delete</button>
+              <button id="mem-save" class="btn small primary" type="button">Save</button>
+            </div>
+            <textarea id="mem-text" spellcheck="false"></textarea>
+            <div id="mem-history" class="mem-history" hidden></div>
+          </div>
+        </div>
+        <div id="mem-semantic" class="mem-semantic muted small"></div>
+      </section>
 
       <section id="page-log" class="page" hidden>
         <header class="page-head">
@@ -181,6 +218,10 @@
             <span>Start the server when the app launches if it isn't running</span>
           </label>
         </fieldset>
+        <label class="field">
+          <span>Memory helper (writes memory-update proposals in the background)</span>
+          <select id="set-helper"></select>
+        </label>
         <label class="field">
           <span>Democritus home folder (memory, logs, training data). Leave empty for the default.</span>
           <input id="set-home" type="text" spellcheck="false" autocomplete="off" />

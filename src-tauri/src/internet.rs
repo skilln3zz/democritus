@@ -215,9 +215,7 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("democritus-dl-{name}-{}", crate::db::now_ms()));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::db::test_dir(name)
     }
 
     #[tokio::test]

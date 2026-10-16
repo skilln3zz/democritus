@@ -79,6 +79,125 @@ pub async fn unload(http: &reqwest::Client, base: &str, model: &str) -> Result<(
     }
 }
 
+/// One non-streaming chat call whose answer must match `schema` (Ollama
+/// structured outputs). Thinking is off: background jobs want the answer only.
+/// `num_ctx` None keeps the model's current context so a loaded brain isn't reloaded.
+pub async fn chat_json(
+    http: &reqwest::Client,
+    base: &str,
+    model: &str,
+    messages: &[Value],
+    schema: &Value,
+    num_ctx: Option<u32>,
+    keep_alive: &str,
+) -> Result<Value, String> {
+    let mut options = json!({ "temperature": 0.2 });
+    if let Some(n) = num_ctx {
+        options["num_ctx"] = json!(n);
+    }
+    let mut body = json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "format": schema,
+        "options": options,
+        "keep_alive": keep_alive,
+        "think": false,
+    });
+    let mut resp = post(http, base, &body).await?;
+    // Models without a thinking mode reject the `think` field: retry without it.
+    if let Err(e) = &resp {
+        if e.contains("think") {
+            body.as_object_mut().map(|o| o.remove("think"));
+            resp = post(http, base, &body).await?;
+        }
+    }
+    let v = resp?;
+    let text = v["message"]["content"].as_str().unwrap_or_default();
+    serde_json::from_str(text).map_err(|e| format!("{model} did not return valid JSON: {e}"))
+}
+
+async fn post(http: &reqwest::Client, base: &str, body: &Value) -> Result<Result<Value, String>, String> {
+    let resp = http
+        .post(format!("{}/api/chat", origin(base)))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .timeout(Duration::from_secs(600))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the model server: {e}"))?;
+    let status = resp.status();
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    if !status.is_success() {
+        return Ok(Err(v["error"].as_str().map(String::from).unwrap_or_else(|| format!("HTTP {status}"))));
+    }
+    Ok(Ok(v))
+}
+
+/// Embeddings for each input (Ollama /api/embed).
+pub async fn embed(http: &reqwest::Client, base: &str, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let resp = http
+        .post(format!("{}/api/embed", origin(base)))
+        .header("content-type", "application/json")
+        .body(json!({ "model": model, "input": inputs, "keep_alive": "10m" }).to_string())
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the model server: {e}"))?;
+    let status = resp.status();
+    let v: Value = serde_json::from_slice(&resp.bytes().await.map_err(|e| e.to_string())?).unwrap_or_default();
+    if !status.is_success() {
+        return Err(v["error"].as_str().map(String::from).unwrap_or_else(|| format!("HTTP {status}")));
+    }
+    let rows = v["embeddings"].as_array().ok_or("no embeddings in the response")?;
+    Ok(rows
+        .iter()
+        .map(|r| r.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect()).unwrap_or_default())
+        .collect())
+}
+
+/// Whether a model with this exact name is installed.
+pub async fn has_model(http: &reqwest::Client, base: &str, name: &str) -> bool {
+    let Ok(resp) = http.get(format!("{}/api/tags", origin(base))).timeout(Duration::from_secs(3)).send().await else {
+        return false;
+    };
+    let v: Value = resp.bytes().await.ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    v["models"].as_array().is_some_and(|a| a.iter().any(|m| m["name"].as_str() == Some(name) || m["model"].as_str() == Some(name)))
+}
+
+/// Registers a local GGUF file with Ollama as a new model `name`: uploads the
+/// blob to the local server (127.0.0.1) and creates the model from it. The
+/// original file is only read.
+pub async fn import_gguf(http: &reqwest::Client, base: &str, path: &std::path::Path, name: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+    let digest: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let blob_url = format!("{}/api/blobs/sha256:{digest}", origin(base));
+    let exists = http.head(&blob_url).send().await.map(|r| r.status().is_success()).unwrap_or(false);
+    if !exists {
+        let r = http.post(&blob_url).body(bytes).timeout(Duration::from_secs(900)).send().await.map_err(|e| e.to_string())?;
+        if !r.status().is_success() {
+            return Err(format!("Uploading the model file to Ollama failed: HTTP {}", r.status()));
+        }
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("model.gguf");
+    let r = http
+        .post(format!("{}/api/create", origin(base)))
+        .header("content-type", "application/json")
+        .body(json!({ "model": name, "files": { file_name: format!("sha256:{digest}") }, "stream": false }).to_string())
+        .timeout(Duration::from_secs(900))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = r.status();
+    let v: Value = serde_json::from_slice(&r.bytes().await.map_err(|e| e.to_string())?).unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Ollama couldn't create {name}: {}", v["error"].as_str().unwrap_or("unknown error")));
+    }
+    Ok(())
+}
+
 /// Memory reserved for the OS and other apps when deciding whether a model fits.
 const RAM_MARGIN: u64 = 2 * 1024 * 1024 * 1024;
 const VRAM_MARGIN: u64 = 512 * 1024 * 1024;
