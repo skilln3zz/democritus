@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Democritus</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-top">
+          <button id="new-chat" class="btn primary block" type="button"></button>
+          <div class="search-wrap">
+            <input id="search" type="search" placeholder="Search chats" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <ul id="conversation-list" aria-label="Conversations"></ul>
+        <div id="sidebar-empty" class="muted small" hidden>No conversations yet</div>
+      </aside>
+
+      <main id="main">
+        <header id="topbar">
+          <div class="model-picker">
+            <label for="model-select" class="muted small">Model</label>
+            <select id="model-select"></select>
+            <button id="refresh-models" class="icon-btn" type="button" title="Refresh model list"></button>
+          </div>
+          <div class="spacer"></div>
+          <button id="server-status" class="status-pill" type="button" data-state="checking">
+            <span class="dot"></span><span class="label">Checking server…</span>
+          </button>
+          <button id="open-settings" class="icon-btn" type="button" title="Settings"></button>
+        </header>
+
+        <div id="banner" class="banner" hidden>
+          <span class="banner-text"></span>
+          <button id="banner-start" class="btn small" type="button">Start server</button>
+        </div>
+
+        <section id="messages" aria-live="polite"></section>
+
+        <footer id="composer">
+          <div id="attachments"></div>
+          <div class="composer-box">
+            <textarea id="input" rows="1" placeholder="Message Democritus…" spellcheck="true"></textarea>
+            <button id="send" class="btn primary" type="button" title="Send (Enter)">Send</button>
+            <button id="stop" class="btn danger" type="button" title="Stop generating (Esc)" hidden>Stop</button>
+          </div>
+          <div class="composer-hint muted small"></div>
+        </footer>
+
+        <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
+      </main>
+    </div>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form" method="dialog">
+        <h2>Settings</h2>
+        <label class="field">
+          <span>System prompt</span>
+          <textarea id="set-system" rows="5"></textarea>
+        </label>
+        <div class="field-row">
+          <label class="field grow">
+            <span>Temperature <output id="set-temp-out"></output></span>
+            <input id="set-temp" type="range" min="0" max="2" step="0.05" />
+          </label>
+          <label class="field">
+            <span>Max tokens</span>
+            <input id="set-max" type="number" min="1" max="262144" step="1" />
+          </label>
+        </div>
+        <p class="muted small">Thinking tokens count toward the max-token limit. If a reply stops mid-thought, raise it.</p>
+        <fieldset>
+          <legend>Model server</legend>
+          <label class="field">
+            <span>OpenAI-compatible URL (must be on this computer)</span>
+            <input id="set-url" type="text" spellcheck="false" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Start command</span>
+            <input id="set-cmd" type="text" spellcheck="false" autocomplete="off" />
+          </label>
+          <label class="check">
+            <input id="set-autostart" type="checkbox" />
+            <span>Start the server when the app launches if it isn't running</span>
+          </label>
+        </fieldset>
+        <p id="settings-error" class="form-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="btn" type="button" id="settings-cancel">Cancel</button>
+          <button class="btn primary" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog">
+      <form method="dialog">
+        <p id="confirm-text"></p>
+        <div class="dialog-actions">
+          <button class="btn" value="cancel" type="submit">Cancel</button>
+          <button class="btn danger" value="ok" type="submit">Delete</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toasts" aria-live="assertive"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
