@@ -26,4 +26,7 @@ export const icons = {
   copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
 };
 
-export const logo = `<svg viewBox="0 0 1024 1024" width="56" height="56" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7B6CFF"/><stop offset="1" stop-color="#3A2DB8"/></linearGradient></defs><rect x="64" y="64" width="896" height="896" rx="200" fill="url(#lg)"/><path d="M300 300h424a96 96 0 0 1 96 96v200a96 96 0 0 1-96 96H504l-130 110V692h-74a96 96 0 0 1-96-96V396a96 96 0 0 1 96-96z" fill="#fff"/><circle cx="392" cy="496" r="40" fill="#4B3CD6"/><circle cx="512" cy="496" r="40" fill="#4B3CD6"/><circle cx="632" cy="496" r="40" fill="#4B3CD6"/></svg>`;
+// The app icon (generated from democritus-split-1024.png), bundled locally.
+import logoUrl from './assets/democritus-256.png';
+
+export const logo = `<img class="app-logo" src="${logoUrl}" width="64" height="64" alt="" />`;

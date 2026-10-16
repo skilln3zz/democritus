@@ -1008,6 +1008,10 @@ dl.details dd {
   margin: 12vh auto 0;
   text-align: center;
 }
+.app-logo {
+  border-radius: 14px;
+  image-rendering: pixelated;
+}
 .empty h1 {
   margin: 12px 0 6px;
   font-size: 22px;
