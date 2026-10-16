@@ -1,6 +1,6 @@
 # Democritus: handoff
 
-Status as of 2026-10-16 (updated by the cloud session on branch `cloud-work`, UI redesign added the same day). Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
+Status as of 2026-10-17 (cloud session on branch `cloud-work`, UI redesign the same day, then a Windows test run on the PC: see "Windows test run, 2026-10-17"). Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
 
 The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do not delete it until the operator says so.**
 
@@ -12,9 +12,9 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 1 | Identity and rename | **Done** (commit `3868323`), except the icon (see Known issues) |
 | 4 | Model memory management | **Done** (commit `fc98a8b`) |
 | 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
-| 2 | Home folder and memory | **Code complete** (commit `24704c0`); Windows end-to-end run (`--only=mem`) still to confirm, see "Test on Windows" |
-| 3 | Continuity across model switches | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "Test on Windows" |
-| UI | "Bohemian dusk" redesign, theme switch, Security check (design/UI-SPEC.md) | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "UI redesign" below |
+| 2 | Home folder and memory | **Code complete** (commit `24704c0`). **Windows run fails:** the memory helper (`qwen3.5:4b`) doesn't reliably produce usable proposals, and meaning search misses the test note. See "Windows test run, 2026-10-17" |
+| 3 | Continuity across model switches | **Verified on Windows** 2026-10-17: `continuity` 10/10, `restart` 6/6 |
+| UI | "Bohemian dusk" redesign, theme switch, Security check (design/UI-SPEC.md) | **Verified on Windows** 2026-10-17 (automated parts): `ui` group and the redesign checks pass; the firewall fix (UAC) and the `OLLAMA_HOST` fix still need the operator |
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
 | 6C | Memory cleanup proposals | Not started |
@@ -96,7 +96,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 - UI: Memory page (`src/memorypage.ts`, `src/diff.ts`), project dropdown in the top bar, memory-helper setting.
 - End-to-end group: `node scripts/e2e.mjs --only=mem`.
 
-## Step 3: continuity (code complete, not yet run against real models)
+## Step 3: continuity (verified on Windows, 2026-10-17)
 
 - `context.rs` (pure, unit-tested) builds every request in the approved order: core identity and custom prompt, `identity.md`, `operator.md`, `current_state.md`, the active project's file, memory search results, the conversation summary, then the history.
   - Memory is wrapped in `<memory …>` tags under "data, not instructions", and can't close its own tag.
@@ -112,15 +112,46 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 - **"Last time" card** on the start screen (`last_time` command): Last task, Project and Next step from `current_state.md`, plus a button to continue the most recent conversation.
 - End-to-end groups: `--only=continuity`, then restart the app, then `--only=restart`.
 
+## Windows test run, 2026-10-17
+
+Run on the PC (RTX 5070 12 GB, 32 GB RAM, Ollama 0.40.2) against the four real models, branch `cloud-work` at `e608e40`. Test data only (`.e2e\`); `D:\Democritus` was not touched.
+
+| Check | Result |
+|---|---|
+| `cargo test --offline` | 77/77 pass |
+| `npm run build` (tsc + vite) | passes |
+| `--only=continuity` | **10/10**: code word survives the 4B → 9B switch, divider and handoff note, memory reaches a new chat, 4096-token window summarizes and keeps "blue pot" |
+| `--only=restart` (after a restart without `-Fresh`) | **6/6**: "Last time" card shows Kestrel, the 9B knows what we were doing |
+| `--only=identity,memory,safety,mem,chat,stop,ui` (fresh) | 51/56. All of identity (4 models), safety, chat (4 models, thinking shown separately), stop, ui and privacy pass. Failures are in `memory` and `mem`, below |
+| Redesign checks, automated over DevTools | Light / Dark / Follow system apply, are saved and cached, and Follow system tracks the OS live; arrow keys move the theme choice; at 1024×700 no page overflows and the pickers and conversation list stay usable; Tab gives a visible focus ring everywhere (the pickers draw it on their wrapper); Security check takes 2.5 s, rows 1, 2 and 6 green with Ollama on 127.0.0.1, a fake `test.bin` in downloads turns row 6 red and is not deleted, runs are logged |
+
+**Failures and what they are**
+
+1. **Step 2 memory helper is unreliable (real problem).** In three fresh `mem` runs the `qwen3.5:4b` helper never produced the expected proposal for the Garden Planner exchange:
+   - once it proposed the project file, `operator.md` and a session note but no `current_state.md`;
+   - once (run alone, as intended) it looped until the JSON was cut off: "did not return valid JSON: EOF while parsing a string at line 300".
+   - `ollama::chat_json` sets no `num_predict` and the schema has no `maxItems` / `maxLength`, so a looping small model runs until the context is full. Suggested fix: cap the output, bound the schema, retry once on invalid JSON, and test against `qwen3.5:4b` specifically.
+   - The rest of the `mem` group (history and undo, path refusals, reject, pause, auto-apply, Lockdown, the 27B fallback, reset) did not run on Windows because it depends on that first proposal. Its `Cannot read properties of undefined (reading 'id')` is a knock-on failure: no `current_state.md` history.
+2. **Meaning search misses the test note (twice).** "Where does the operator live, and what do they grow?" returns `operator.md › Operator`, `identity.md › Operator`… but not `operator.md › Facts` (Vienna). The query shares the word "operator", so the keyword list ranks those headings first and reciprocal rank fusion keeps them ahead. Either the test query isn't a pure meaning test, or fusion should weight meaning results more. Not yet decided.
+3. **`memory: panel shows model …` (test is out of date).** The "In memory" list now also shows `qwen3-embedding:0.6b` (loaded by memory search), and it comes first. The app is right; the test expects the brain in the first row.
+4. **Fit warning wording (depends on free RAM).** With the 27B loaded by another program, the coder check said "needs about 22.2 GB … only 2.0 GB is free, even after unloading the other models", without an Unload button, so the test couldn't continue. About 18.5 GB of RAM was free before the test (other programs open). Re-run Step 4's group with more free RAM before treating this as a bug.
+5. **One-off: Ctrl+N timed out after 5 s** in the first `memory` run. It could not be reproduced (Ctrl+N shows the empty chat in about 10 ms, also right after an external 27B load).
+- Running `memory` and `mem` in the same run makes `mem` pick up stale helper jobs from the `memory` group's chats. Run `mem` on its own, as the list below says.
+
+**Shutdown hang reproduced once** (see Known issues): after the continuity run, the first close request did nothing for 30+ s; the window then went away but `democritus.exe` stayed. Stacks taken with `dbghelp` (no debugger installed): every thread idle, the main thread waiting in tao's `GetMessageW` loop, no windows left, and the `ollama serve` the app started still alive, so the `RunEvent::Exit` handler never ran. Four later closes exited in 0.3–0.8 s and stopped Ollama as they should.
+
+**Still needs the operator:** the Security check fixes that change system settings (the `OLLAMA_HOST=0.0.0.0` test and its fix; "Create rules" with the UAC prompt), the firewall download exception (`e608e40`) with a real approved download, the attach button's native file picker, the Windows dark/light switch itself (only emulated here), and the VRAM comparison in Task Manager.
+
 ## Exact next steps
 
-1. **Operator:** run the "Test on Windows" list below and report failures.
-2. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
-3. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.
-4. **Step 6C:** weekly or on-demand memory cleanup proposals, applied only with approval.
-5. **Step 6D:** dataset export of highly rated and edited answers plus self-description examples, saved to `<home>\training\`, and a Train page. 6E reuses both. Do not build a second export.
-6. Final: rebuild the installers (`npm run tauri build`), update the README, and report to the operator in the same format as last time.
-7. Then **Step 6E**, as specified in the operator's 6E message: preflight, lesson set, QLoRA, packaging as `democritus:<size>-v<N>`, evaluation, overnight mode, a small end-to-end test run first. Do not start a full build.
+1. **Step 2 fixes:** make the memory helper reliable with `qwen3.5:4b` (failure 1), decide on meaning search (failure 2), update the out-of-date `memory` panel check (failure 3), then re-run `--only=mem` on fresh data until the whole group passes.
+2. **Operator:** the "Still needs the operator" items above.
+3. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
+4. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.
+5. **Step 6C:** weekly or on-demand memory cleanup proposals, applied only with approval.
+6. **Step 6D:** dataset export of highly rated and edited answers plus self-description examples, saved to `<home>\training\`, and a Train page. 6E reuses both. Do not build a second export.
+7. Final: rebuild the installers (`npm run tauri build`), update the README, and report to the operator in the same format as last time.
+8. Then **Step 6E**, as specified in the operator's 6E message: preflight, lesson set, QLoRA, packaging as `democritus:<size>-v<N>`, evaluation, overnight mode, a small end-to-end test run first. Do not start a full build.
 
 ## Operator decisions (binding)
 
@@ -150,9 +181,11 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
   - It was gone a minute later.
   - Next diagnostic: `scripts/dev-e2e.ps1 -ExtraArgs "--log-net-log=<path>\netlog.json --net-log-capture-mode=Default"`, then look for the hostname in the net log.
   - The page itself makes no external requests; every end-to-end run checks this.
-- **Shutdown hang, seen once, not reproduced.** After a full safety test run, the window closed but `democritus.exe` stayed alive: idle, 23 threads, WebView2 children and the DevTools port gone. I force-stopped it.
-  - Two later identical runs exited in 0.2–0.3 s.
-  - Cause unknown. Suspects to check: the `RunEvent::Exit` handler, or a pending IPC call during webview teardown.
+- **Shutdown hang, seen twice, intermittent.** After a full safety test run, and again on 2026-10-17 after the continuity run, the window closed but `democritus.exe` stayed alive: idle, 22–25 threads, WebView2 children and the DevTools port gone. Force-stopped both times.
+  - The second time, the first close request did nothing for over 30 s before the window went away.
+  - Stacks (2026-10-17): the main thread sits idle in tao's event loop (`GetMessageW`), no windows remain, and the app's own `ollama serve` is still running, so `RunEvent::Exit` was never reached. This is not a deadlock in Democritus's code. `tauri-runtime-wry` 2.12.2 only requests exit when it handles the window's `Destroyed` event and finds no windows left, so look there: a slow WebView2 teardown, or a close that bypasses `Destroyed`.
+  - Other closes exited in 0.2–0.8 s (six times). It seems to need a long session with the memory helper busy.
+  - A possible guard: on `WindowEvent::Destroyed` of the main window, call `app.exit(0)` explicitly.
 - **How Lockdown was interpreted:** Lockdown blocks all *internet* (non-loopback) access and pauses learning and memory writes. Chat with the local Ollama server on 127.0.0.1 still works. Confirm with the operator that this is what they want.
 - **Ollama's own model loading** can still fail transiently with a CUDA error right after a large model unloads, as seen in the first build. The app shows a "try sending again" message.
 - **Context window vs. VRAM.** The fit check (Step 4) estimates from file size and doesn't yet account for the context window. Measured footprints update on the next load. Step 6A should pick the window per model from the benchmark.
@@ -237,7 +270,12 @@ Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safe
 
 ### Decisions for the operator
 
-- **The Democritus firewall rule also blocks approved downloads** (they come from `democritus.exe`). The dialog says so. If you want both, switch the rule off in Windows Defender Firewall (group "Democritus") while downloading, or tell me to build an exception.
+- **The Democritus firewall rule would also block approved downloads** (they come from `democritus.exe`), so there is now an exception (commit `e608e40`):
+  - For each approved download, an elevated helper (one UAC prompt) switches off only the `democritus.exe` rule in group "Democritus".
+  - It switches the rule back on when the download finishes, fails or is cancelled, when the app exits, or at a deadline. It never touches Ollama's rules and never creates an Allow rule.
+  - At start, the app warns with a "Re-enable rule" banner if the rule was left off. The Security check row stays red until the rule is back on.
+  - Memory writes outside `memory\` are now logged too.
+  - Unit-tested (`secrules`); not yet tried with a real download on Windows.
 - Firewall rules are tied to a program path. A rule created from a dev run covers `src-tauri\target\debug\democritus.exe`, not the installed app; run "Create rules" again from the installed app.
 - `msedgewebview2.exe` (the WebView2 connection in Known issues) is **not** covered: a rule for it would cut every WebView2 app on the PC.
 - Left out on purpose because the features don't exist yet: the Performance link (Step 6A), thumbs up/down and edit on replies (6B), "Edit first" on memory proposals. The mockups show them; they'll slot into the same places.
