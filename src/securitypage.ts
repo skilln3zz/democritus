@@ -2,7 +2,8 @@
 // state; a fix only runs after the operator has seen its exact commands and
 // pressed "Run commands". The window sends just the fix id: the backend
 // rebuilds the commands itself.
-import { api, type SecurityFix, type SecurityItem } from './api';
+import { listen } from '@tauri-apps/api/event';
+import { api, type FirewallStatus, type SecurityFix, type SecurityItem } from './api';
 import { toggleLockdown } from './operatorpage';
 import { onShow } from './pages';
 import { $, errorText, escapeText, toast } from './ui';
@@ -83,6 +84,37 @@ async function applyFix(id: string, button: HTMLButtonElement) {
     toast(errorText(e), 'error', 8000);
   }
   await run();
+}
+
+// ---------- startup warning: Democritus's firewall rule left switched off ----------
+
+function showFirewallStatus(s: FirewallStatus) {
+  const banner = $('#firewall-banner');
+  banner.hidden = s.state !== 'off';
+  if (s.state === 'off') {
+    banner.querySelector('.banner-text')!.textContent = `Warning: ${s.detail} Switch it back on to keep Democritus offline.`;
+  }
+}
+
+async function reenableFirewall(btn: HTMLButtonElement) {
+  btn.disabled = true;
+  try {
+    const s = await api.firewallReenable(); // Windows shows an administrator prompt
+    showFirewallStatus(s);
+    toast(s.state === 'on' ? "Democritus's firewall rule is back on." : s.detail, s.state === 'on' ? 'info' : 'error', 8000);
+  } catch (e) {
+    toast(errorText(e), 'error', 8000);
+  } finally {
+    btn.disabled = false;
+  }
+  if (checkedOnce) await run();
+}
+
+/** Checks at every start (the backend also emits `firewall-warning`). */
+export function initFirewallWarning() {
+  void api.firewallStatus().then(showFirewallStatus).catch(() => {});
+  void listen<FirewallStatus>('firewall-warning', (e) => showFirewallStatus(e.payload));
+  $('#firewall-reenable').addEventListener('click', (e) => void reenableFirewall(e.currentTarget as HTMLButtonElement));
 }
 
 export function initSecurityCheck() {

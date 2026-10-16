@@ -205,6 +205,149 @@ fn files_in(dir: &Path, depth: usize) -> Vec<PathBuf> {
     out
 }
 
+// ---------- Democritus's own firewall rule (download exception) ----------
+//
+// When the operator approves a download, Democritus switches off ONLY its own
+// outbound block rule (group "Democritus", program = democritus.exe) and
+// switches it back on as soon as the download ends. Ollama's rules are never
+// touched and no Allow rule is ever created: the only commands are
+// Disable-/Enable-NetFirewallRule on validated rule ids.
+
+/// One rule from `Get-NetFirewallRule -Group 'Democritus' -Direction Outbound -Action Block`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct FwRule {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "DisplayName", default)]
+    pub display_name: String,
+    /// "True" / "False" (the script casts the enum to text).
+    #[serde(rename = "Enabled", default)]
+    pub enabled: String,
+    #[serde(rename = "Program", default)]
+    pub program: String,
+}
+
+impl FwRule {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.eq_ignore_ascii_case("true") || self.enabled == "1"
+    }
+}
+
+/// PowerShell that lists the Democritus group's outbound block rules as JSON.
+pub const LIST_RULES_SCRIPT: &str = "$r = @(Get-NetFirewallRule -Group 'Democritus' -Direction Outbound -Action Block -ErrorAction SilentlyContinue | ForEach-Object { \
+     $f = $_ | Get-NetFirewallApplicationFilter; \
+     [pscustomobject]@{ Name = $_.Name; DisplayName = $_.DisplayName; Enabled = [string]$_.Enabled; Program = [Environment]::ExpandEnvironmentVariables([string]$f.Program) } }); \
+     ConvertTo-Json -InputObject $r -Compress";
+
+/// Parses LIST_RULES_SCRIPT output (an array, a single object, or nothing).
+pub fn parse_fw_rules(json: &str) -> Vec<FwRule> {
+    let v: serde_json::Value = serde_json::from_str(json.trim()).unwrap_or(serde_json::Value::Null);
+    match v {
+        serde_json::Value::Array(a) => a.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect(),
+        o @ serde_json::Value::Object(_) => serde_json::from_value(o).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Rule ids come from Windows ("{GUID}" or a name); anything that could break
+/// out of a PowerShell string is refused.
+pub fn valid_rule_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 128 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '{' | '}' | '-' | '_' | '.' | ' '))
+}
+
+/// Democritus's own rules: in the Democritus group (already filtered by the
+/// query) AND for this exact program. Ollama's rules can never match.
+pub fn own_rules(rules: &[FwRule], exe: &Path) -> Vec<FwRule> {
+    rules.iter().filter(|r| same_path(&r.program, exe) && valid_rule_name(&r.name)).cloned().collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OwnRuleState {
+    /// No Democritus rule: nothing blocks it, nothing to switch.
+    NoRule,
+    AllOn,
+    /// Ids of own rules that are switched off.
+    Off(Vec<String>),
+}
+
+pub fn own_rule_state(own: &[FwRule]) -> OwnRuleState {
+    if own.is_empty() {
+        return OwnRuleState::NoRule;
+    }
+    let off: Vec<String> = own.iter().filter(|r| !r.is_enabled()).map(|r| r.name.clone()).collect();
+    if off.is_empty() {
+        OwnRuleState::AllOn
+    } else {
+        OwnRuleState::Off(off)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadFirewallPlan {
+    /// No Democritus rule exists: download directly.
+    NothingToDo,
+    /// The rule is already off (switched off by hand, or a crash): don't
+    /// touch it; the startup check and Security check report it.
+    AlreadyOff,
+    /// Switch these (enabled, own) rules off for the download, then on again.
+    SwitchOff(Vec<String>),
+}
+
+pub fn download_plan(own: &[FwRule]) -> DownloadFirewallPlan {
+    match own_rule_state(own) {
+        OwnRuleState::NoRule => DownloadFirewallPlan::NothingToDo,
+        OwnRuleState::Off(_) => DownloadFirewallPlan::AlreadyOff,
+        OwnRuleState::AllOn => DownloadFirewallPlan::SwitchOff(own.iter().map(|r| r.name.clone()).collect()),
+    }
+}
+
+fn name_list(names: &[String]) -> Result<String, String> {
+    if names.is_empty() || !names.iter().all(|n| valid_rule_name(n)) {
+        return Err("refusing to build a firewall command for an unexpected rule id".into());
+    }
+    Ok(names.iter().map(|n| ps_quote(n)).collect::<Vec<_>>().join(","))
+}
+
+pub fn enable_command(names: &[String]) -> Result<String, String> {
+    Ok(format!("Enable-NetFirewallRule -Name {}", name_list(names)?))
+}
+
+/// The elevated helper for one download: switches the rules off, tells the app
+/// (file `off`), waits until the app writes `done`, the app's process is gone,
+/// or the deadline passes, and then ALWAYS switches the rules back on (finally)
+/// and writes `on`.
+pub fn toggle_script(names: &[String], signal_dir: &Path, app_pid: u32, max_minutes: u32) -> Result<String, String> {
+    let list = name_list(names)?;
+    let d = |f: &str| ps_quote(&signal_dir.join(f).display().to_string());
+    Ok(format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         try {{\n\
+         \x20 Disable-NetFirewallRule -Name {list}\n\
+         \x20 Set-Content -LiteralPath {off} -Value 'off'\n\
+         \x20 $deadline = (Get-Date).AddMinutes({max_minutes})\n\
+         \x20 while (-not (Test-Path -LiteralPath {done}) -and (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {{ Start-Sleep -Milliseconds 500 }}\n\
+         }} finally {{\n\
+         \x20 Enable-NetFirewallRule -Name {list}\n\
+         \x20 Set-Content -LiteralPath {on} -Value 'on'\n\
+         }}",
+        off = d("off"),
+        done = d("done"),
+        on = d("on"),
+    ))
+}
+
+/// Waits for a signal file from the elevated helper.
+pub fn wait_for_file(path: &Path, timeout: std::time::Duration) -> bool {
+    let end = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < end {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    path.exists()
+}
+
 // ---------- system probes (Windows) ----------
 
 #[cfg(test)]
@@ -275,6 +418,95 @@ mod tests {
         assert!(same_path(r"c:\program files\ollama\OLLAMA.EXE", Path::new(r"C:\Program Files\Ollama\ollama.exe")));
         assert!(same_path("C:/x/y.exe", Path::new(r"C:\x\y.exe")));
         assert!(!same_path(r"C:\x\z.exe", Path::new(r"C:\x\y.exe")));
+    }
+
+    fn rule(name: &str, program: &str, enabled: bool) -> FwRule {
+        FwRule { name: name.into(), display_name: format!("rule for {program}"), enabled: if enabled { "True" } else { "False" }.into(), program: program.into() }
+    }
+
+    const EXE: &str = r"C:\Program Files\Democritus\democritus.exe";
+
+    #[test]
+    fn parses_firewall_rule_listings() {
+        let many = r#"[{"Name":"{1A2B}","DisplayName":"Democritus: block internet for Democritus (democritus.exe)","Enabled":"True","Program":"C:\\Program Files\\Democritus\\democritus.exe"},
+                       {"Name":"{3C4D}","DisplayName":"Democritus: block internet for Ollama (ollama.exe)","Enabled":"False","Program":"C:\\Users\\op\\AppData\\Local\\Programs\\Ollama\\ollama.exe"}]"#;
+        let r = parse_fw_rules(many);
+        assert_eq!(r.len(), 2);
+        assert!(r[0].is_enabled() && !r[1].is_enabled());
+        let one = r#"{"Name":"{1A2B}","DisplayName":"x","Enabled":"True","Program":"C:\\x.exe"}"#;
+        assert_eq!(parse_fw_rules(one).len(), 1, "a single rule comes back as an object, not an array");
+        assert!(parse_fw_rules("").is_empty() && parse_fw_rules("null").is_empty() && parse_fw_rules("[]").is_empty());
+    }
+
+    #[test]
+    fn only_democritus_rules_are_ever_switched() {
+        let rules = vec![
+            rule("{own}", EXE, true),
+            rule("{ollama}", r"C:\Users\op\AppData\Local\Programs\Ollama\ollama.exe", true),
+            rule("{tray}", r"C:\Users\op\AppData\Local\Programs\Ollama\ollama app.exe", true),
+            rule("{bad'; Remove-NetFirewallRule -All; '}", EXE, true),
+        ];
+        let own = own_rules(&rules, Path::new(&EXE.to_uppercase()));
+        assert_eq!(own.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["{own}"], "Ollama rules and odd ids are excluded");
+        assert_eq!(download_plan(&own), DownloadFirewallPlan::SwitchOff(vec!["{own}".into()]));
+    }
+
+    #[test]
+    fn download_and_startup_plans() {
+        assert_eq!(download_plan(&[]), DownloadFirewallPlan::NothingToDo);
+        assert_eq!(own_rule_state(&[]), OwnRuleState::NoRule);
+        let on = vec![rule("{a}", EXE, true)];
+        assert_eq!(own_rule_state(&on), OwnRuleState::AllOn);
+        let off = vec![rule("{a}", EXE, false), rule("{b}", EXE, true)];
+        assert_eq!(own_rule_state(&off), OwnRuleState::Off(vec!["{a}".into()]), "startup check flags a switched-off rule");
+        assert_eq!(download_plan(&off), DownloadFirewallPlan::AlreadyOff, "a rule that's already off is left alone (and reported)");
+    }
+
+    #[test]
+    fn rule_ids_are_validated() {
+        assert!(valid_rule_name("{2F8C1D2E-1111-4A4A-9999-ABCDEF012345}"));
+        for bad in ["", "a'b", "x;y", "x$(y)", "x`y", "a\"b", &"x".repeat(200)] {
+            assert!(!valid_rule_name(bad), "{bad:?}");
+        }
+        assert!(enable_command(&["a'b".into()]).is_err());
+        assert!(enable_command(&[]).is_err());
+        assert_eq!(enable_command(&["{a}".into(), "{b}".into()]).unwrap(), "Enable-NetFirewallRule -Name '{a}','{b}'");
+    }
+
+    #[test]
+    fn toggle_script_always_switches_back_on_and_never_allows() {
+        let dir = Path::new(r"D:\Democritus\.firewall\ap-1");
+        let s = toggle_script(&["{own}".into()], dir, 4242, 30).unwrap();
+        let off = s.find("Disable-NetFirewallRule -Name '{own}'").expect("disables");
+        let fin = s.find("} finally {").expect("has finally");
+        let on = s.find("Enable-NetFirewallRule -Name '{own}'").expect("re-enables");
+        assert!(off < fin && fin < on, "re-enable runs in the finally block");
+        assert!(s.contains("Get-Process -Id 4242"), "stops waiting when the app is gone (crash safety)");
+        assert!(s.contains("AddMinutes(30)"), "has a deadline");
+        assert!(s.contains(r"'D:\Democritus\.firewall\ap-1\done'"));
+        for forbidden in ["Allow", "New-NetFirewallRule", "Remove-NetFirewallRule", "ollama", "-All"] {
+            assert!(!s.contains(forbidden), "script must not contain {forbidden}");
+        }
+        assert!(toggle_script(&["{x'}".into()], dir, 1, 1).is_err());
+    }
+
+    #[test]
+    fn helper_signal_sequence() {
+        // Simulates the elevated helper: writes `off`, waits for `done`, writes `on`.
+        let dir = crate::db::test_dir("fw-signal");
+        let d2 = dir.clone();
+        let helper = std::thread::spawn(move || {
+            std::fs::write(d2.join("off"), "off").unwrap();
+            assert!(wait_for_file(&d2.join("done"), std::time::Duration::from_secs(5)));
+            std::fs::write(d2.join("on"), "on").unwrap();
+        });
+        assert!(wait_for_file(&dir.join("off"), std::time::Duration::from_secs(5)), "app sees the rule go off");
+        assert!(!dir.join("on").exists(), "still off during the download");
+        std::fs::write(dir.join("done"), "done").unwrap(); // download finished / failed / cancelled
+        assert!(wait_for_file(&dir.join("on"), std::time::Duration::from_secs(5)), "rule back on");
+        helper.join().unwrap();
+        assert!(!wait_for_file(&dir.join("never"), std::time::Duration::from_millis(300)), "times out");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

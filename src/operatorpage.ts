@@ -137,8 +137,9 @@ function askApproval(a: Approval): Promise<boolean> {
   const dialog = $<HTMLDialogElement>('#approval-dialog');
   $('#approval-what').textContent =
     a.kind === 'lookup'
-      ? 'Democritus will send ONE request to look up the size and checksum of this file. Nothing is downloaded yet.'
-      : 'Democritus will download this file and verify its checksum.';
+      ? 'Democritus will send ONE request to look up the size and checksum of this file. Nothing is downloaded yet. ' +
+        "If Democritus's firewall rule is on, Windows asks for administrator approval to switch off only that rule until this download ends; Ollama's rules stay on."
+      : 'Democritus will download this file and verify its checksum. Its firewall rule goes back on as soon as the download ends.';
   const rows: [string, string][] = [
     ['Address', a.url],
     ['File', a.fileName],
@@ -174,6 +175,10 @@ async function startDownload() {
     status.textContent = ok ? (approval.kind === 'lookup' ? 'Looking up…' : 'Downloading…') : 'Denied. Nothing was sent.';
     try {
       const outcome = await api.respondApproval(approval.id, ok, (p) => {
+        if (p.stage !== undefined && p.stage !== null) {
+          if (p.stage) status.textContent = p.stage;
+          return;
+        }
         const pct = p.total ? ` (${Math.floor((p.done / p.total) * 100)}%)` : '';
         status.textContent = `Downloading… ${formatBytes(p.done)}${p.total ? ` of ${formatBytes(p.total)}` : ''}${pct}`;
       });

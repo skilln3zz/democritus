@@ -258,6 +258,18 @@ export interface SecurityItem {
   fix: SecurityFix | null;
 }
 
+export interface DownloadProgress {
+  done: number;
+  total: number | null;
+  /** Set while switching the firewall rule; null during the transfer. */
+  stage?: string | null;
+}
+
+export interface FirewallStatus {
+  state: 'none' | 'on' | 'off' | 'unknown';
+  detail: string;
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -315,8 +327,10 @@ export const api = {
   readActivity: (limit: number, kind: string, query: string) =>
     invoke<ActivityEntry[]>('read_activity', { limit, kind: kind || null, query: query || null }),
   requestDownload: (url: string) => invoke<Approval>('request_download', { url }),
-  respondApproval: (id: string, approve: boolean, onProgress: (p: { done: number; total: number | null }) => void) => {
-    const channel = new Channel<{ done: number; total: number | null }>();
+  firewallStatus: () => invoke<FirewallStatus>('firewall_status'),
+  firewallReenable: () => invoke<FirewallStatus>('firewall_reenable'),
+  respondApproval: (id: string, approve: boolean, onProgress: (p: DownloadProgress) => void) => {
+    const channel = new Channel<DownloadProgress>();
     channel.onmessage = onProgress;
     return invoke<ApprovalOutcome>('respond_approval', { id, approve, onProgress: channel });
   },
