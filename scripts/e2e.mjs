@@ -10,6 +10,7 @@
 //      node scripts/e2e.mjs --only=persisted   # after restarting the app
 //
 // Options: --port=9222  --models=a,b  --only=chat,stop,ui,persisted  --shots=<dir>
+//   Step 3: --only=continuity, restart the app (without -Fresh), then --only=restart
 
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -808,6 +809,87 @@ async function testPersisted(cdp) {
   await screenshot(cdp, 'after-restart');
 }
 
+// Step 3: the same conversation continues across a brain switch, memory
+// reaches every request, and older messages are summarized when the window is
+// full. Run `--only=continuity`, restart the app, then `--only=restart`.
+const CODE_WORD = 'heron-42';
+const CODENAME = 'Kestrel';
+
+async function testContinuity(cdp) {
+  const call = (cmd, a = {}) => cdp.eval(invoke(cmd, a));
+  const small = 'qwen3.5:4b';
+  const medium = 'qwen3.5:9b';
+
+  // 1. Brain switch mid-conversation.
+  await newChat(cdp);
+  await selectModel(cdp, small);
+  await typeAndSend(cdp, `For this conversation, remember the code word ${CODE_WORD}. Reply only with OK.`);
+  await awaitReply(cdp, 600_000);
+  await selectModel(cdp, medium);
+  await typeAndSend(cdp, 'What is the code word I gave you earlier? Reply with just the code word.');
+  const r = await awaitReply(cdp, 900_000);
+  report('continuity: new brain knows what was said to the old one', r.snap.content.includes(CODE_WORD), `"${r.snap.content.slice(0, 120)}"`);
+  const divider = await cdp.eval(`document.querySelector('.brain-switch')?.innerText ?? ''`);
+  report('continuity: "Brain switched" divider with handoff note', divider.includes(`Brain switched to ${medium}`) && /Handed over/.test(divider), divider.replace(/\s+/g, ' '));
+  const convId = await activeConversationId(cdp);
+  const saved = (await savedMessages(cdp, convId)).filter((m) => m.role === 'assistant');
+  const ctx = saved[saved.length - 1]?.stats?.context;
+  report('continuity: reply records the handoff and context', ctx?.switchedFrom === small && ctx.numCtx > 0, JSON.stringify(ctx));
+  const log = await call('read_activity', { limit: 20, kind: 'model', query: 'handoff' });
+  report('continuity: handoff logged', log.length > 0, log[0] ? JSON.stringify(log[0].detail) : 'none');
+  await screenshot(cdp, 'brain-switch');
+
+  // 2. Memory reaches a brand-new conversation (hand edits win).
+  const o = await call('memory_overview');
+  const opBefore = await call('memory_read', { path: 'operator.md' });
+  await call('memory_write', { path: 'operator.md', content: `${opBefore.trimEnd()}\n- E2E: the operator's favourite tree is the ginkgo.\n` });
+  await call('memory_write', {
+    path: 'current_state.md',
+    content: `# Current state\n\n## Active project\nGarden planner\n\n## Last task\nE2E: chose the codename ${CODENAME} for the garden project.\n\n## Open questions\n\n## Next step\nSketch the bed layout.\n`,
+  });
+  await newChat(cdp);
+  await selectModel(cdp, small);
+  await typeAndSend(cdp, 'What is my favourite tree? Answer in one short sentence.');
+  const tree = await awaitReply(cdp, 600_000);
+  report('continuity: memory files reach a new conversation', /ginkgo/i.test(tree.snap.content), `"${tree.snap.content.slice(0, 120)}" (memory in ${o.memoryDir})`);
+
+  // 3. Summaries when the window fills up: shrink the window, send long turns.
+  const settings = await call('get_settings');
+  await call('save_settings', { settings: { ...settings, contextTokens: 4096, maxTokens: 1024 } });
+  try {
+    await newChat(cdp);
+    await selectModel(cdp, small);
+    await typeAndSend(cdp, `Remember this: the shed key is under the blue pot. Reply only with OK.`);
+    await awaitReply(cdp, 600_000);
+    const filler = 'This is filler text to fill the context window. '.repeat(70);
+    for (let i = 1; i <= 4; i++) {
+      await typeAndSend(cdp, `Part ${i} of some notes, just reply OK: ${filler}`);
+      await awaitReply(cdp, 600_000);
+    }
+    await typeAndSend(cdp, 'Where is the shed key? Reply in one short sentence.');
+    const key = await awaitReply(cdp, 600_000);
+    const sumLog = await call('read_activity', { limit: 20, kind: 'memory', query: 'summarized' });
+    report('continuity: older messages summarized when the window is full', sumLog.length > 0, sumLog[0] ? JSON.stringify(sumLog[0].detail) : 'no summary logged');
+    report('continuity: summary keeps the facts', /blue pot/i.test(key.snap.content), `"${key.snap.content.slice(0, 120)}" · ${key.snap.footer}`);
+  } finally {
+    await call('save_settings', { settings });
+  }
+  // Leave current_state.md with the codename for the restart check; restore operator.md.
+  await call('memory_write', { path: 'operator.md', content: opBefore });
+}
+
+async function testRestart(cdp) {
+  await newChat(cdp);
+  const card = await waitFor(cdp, `(() => { const c = document.querySelector('.last-time'); return c && !c.hidden ? c.innerText : null; })()`, 10_000, '"Last time" card').catch(() => '');
+  report('restart: "Last time" card on the start screen', card.includes(CODENAME), card.replace(/\s+/g, ' '));
+  await selectModel(cdp, 'qwen3.5:9b');
+  await typeAndSend(cdp, 'What were we working on last time, and what codename did we choose? Answer in one or two sentences.');
+  const r = await awaitReply(cdp, 900_000);
+  report('restart: Democritus knows what we were doing', r.snap.content.includes(CODENAME), `"${r.snap.content.slice(0, 200)}"`);
+  const convs = await cdp.eval(invoke('list_conversations', { query: CODE_WORD }));
+  report('restart: the brain-switch conversation survived', convs.length > 0, convs.map((c) => c.title).join(' | '));
+}
+
 // ---------- main ----------
 
 const page = await findPage();
@@ -843,6 +925,8 @@ try {
   if (ONLY.has('download')) await testDownload(cdp, args.url).catch((e) => report('download', false, e.message));
   if (ONLY.has('mem')) await testMemorySystem(cdp).catch((e) => report('mem', false, e.message));
   if (ONLY.has('persisted')) await testPersisted(cdp);
+  if (ONLY.has('continuity')) await testContinuity(cdp).catch((e) => report('continuity', false, e.message));
+  if (ONLY.has('restart')) await testRestart(cdp).catch((e) => report('restart', false, e.message));
   if (ONLY.has('chat')) {
     for (const m of models) {
       try {
