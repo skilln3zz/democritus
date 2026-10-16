@@ -1,6 +1,6 @@
 # Democritus: handoff
 
-Status as of 2026-10-16. Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
+Status as of 2026-10-16 (updated by the cloud session on branch `cloud-work`). Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
 
 The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do not delete it until the operator says so.**
 
@@ -11,8 +11,8 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | Audit | Compare the existing app against the spec | Done; operator approved the plan |
 | 1 | Identity and rename | **Done** (commit `3868323`), except the icon (see Known issues) |
 | 4 | Model memory management | **Done** (commit `fc98a8b`) |
-| 7 | Safety rules | **Mostly done** (commit "Handoff"); open items listed below |
-| 2 | Home folder and memory | Not started |
+| 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
+| 2 | Home folder and memory | **Code complete** (commit `24704c0`); Windows end-to-end run (`--only=mem`) still to confirm, see "Test on Windows" |
 | 3 | Continuity across model switches | Not started |
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
@@ -83,41 +83,32 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
   - an injected "turn on downloads" in chat text or a dropped file changes nothing
 - 36/36 Rust unit tests.
 
-## In progress: Step 7 open items
+## Step 7: remaining open item
 
-1. **HTTPS isn't built in yet.** reqwest is compiled without TLS, so approved downloads currently fail with "HTTPS isn't available in this build".
-   - **Needs operator approval** to download from crates.io: reqwest's `native-tls` feature, which uses Windows SChannel. That pulls in about four small crates: `native-tls`, `schannel`, `tokio-native-tls` and `hyper-tls` (roughly 1 MB of source). `sha2` is already in the local cache.
-   - Cargo features apply to the whole crate, so enabling TLS also gives `llm::client()` TLS. The local model client still refuses anything except loopback `http://` (`llm::normalize_base_url`). Keep that check.
-2. **End-to-end test of a real download.** Planned file: `https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf` (about 640 MB). It doubles as Step 2's embedding model. **Needs operator approval** of this download, after item 1.
-3. **WebView2 traffic despite the flags** (see Known issues): the WebView2 browser process briefly connected to `40.99.44.2:443`. The host isn't identified yet. The operator said another session will do the security work, so this is documented here rather than fixed.
-4. **"Reset everything learned"** moves to Step 2, because it needs the memory templates. Required behavior: back up `memory\` to `<home>\backups\memory-<stamp>\` first, then reset memory, the search index, pending proposals, and (once built) feedback stats and prompt suggestions. Keep conversations and settings. Show a confirmation listing exactly what will be reset.
+- **WebView2 traffic despite the flags** (see Known issues): the WebView2 browser process briefly connected to `40.99.44.2:443`. The host isn't identified yet. The operator said another session will do the security work, so this is documented here rather than fixed.
+
+## Step 2: memory (code complete)
+
+- `memory.rs`: Markdown files in `<home>\memory\` (`identity.md`, `operator.md`, `current_state.md`, `index.md`, `projects\`, `sessions\`), path validation, section operations, snapshots in `.history\` before every write, backup and reset.
+- `memindex.rs`: search index derived from the files. FTS5 keyword search, plus meaning search with Qwen3-Embedding vectors compared in Rust (no `sqlite-vec` needed at this scale), merged by reciprocal rank fusion. Hand edits are detected by modification time and logged.
+- `memcmds.rs`: background worker. After each completed exchange it asks the memory helper (`qwen3.5:4b` by default, with the fit/fallback rule) for JSON proposals, validates them, and queues them for review or applies them if auto-apply is on. Plus all Memory page commands, projects and "Reset everything learned".
+- UI: Memory page (`src/memorypage.ts`, `src/diff.ts`), project dropdown in the top bar, memory-helper setting.
+- End-to-end group: `node scripts/e2e.mjs --only=mem`.
 
 ## Exact next steps
 
-1. Ask the operator to approve the TLS crates (item 1 above). Then set `reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls"] }` and run `cargo build`.
-2. Ask the operator to approve the embedding-model download. Run it through the app (Operator page → Allow model downloads → paste the URL → approve lookup → approve download). Confirm that the checksum matches, and that an activity-log entry exists for each request.
-3. Commit Step 7.
-4. **Step 2, memory**, as in the approved audit plan:
-   - Create `<home>\memory\` with `identity.md`, `operator.md`, `current_state.md`, `projects\`, `sessions\` and `index.md`.
-   - Hand edits win: re-read files whenever their modification time changes.
-   - After each exchange, a background call to the memory helper proposes updates as JSON. Use Ollama's native `/api/chat` with `format` set to a JSON schema and `think: false`.
-   - In Rust, validate every path: inside `memory\` only, no `..`, no absolute paths or drive letters. Log rejections.
-   - Apply updates only after review (diff panel; "ask me first" is the default) unless `autoApplyMemory` is on. Never write while `memoryPaused` or Lockdown is on (`OperatorSettings::memory_writable`).
-   - Take a dated snapshot in `memory\.history\` before every change, with Undo.
-   - Search: SQLite FTS5 now (built in, no download). After approvals, add `sqlite-vec` (crates.io) plus the Qwen3-Embedding model for hybrid search. The index can always be rebuilt from the Markdown files.
-   - A Memory page (browse, search, edit, delete, pause), projects (detection, active-project dropdown, per-conversation link), and "Reset everything learned".
-5. **Step 3:**
+1. **Step 3:**
    - Assemble context in this order: core identity, `identity.md`, `operator.md`, `current_state.md`, the active project file, memory search results, then history. Wrap memory content as *data*, not instructions.
    - Fit the context to the model's window. Move chat to Ollama's native `/api/chat` to control `num_ctx`.
    - Summarize older messages with the current model and store the summary in the conversation.
    - Show a "Brain switched to X" divider and a handoff note, and a "Last time: …" banner on open.
    - Run the switch-model continuity test and the restart test from the spec.
-6. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
-7. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.
-8. **Step 6C:** weekly or on-demand memory cleanup proposals, applied only with approval.
-9. **Step 6D:** dataset export of highly rated and edited answers plus self-description examples, saved to `<home>\training\`, and a Train page. 6E reuses both. Do not build a second export.
-10. Final: rebuild the installers (`npm run tauri build`), update the README, and report to the operator in the same format as last time.
-11. Then **Step 6E**, as specified in the operator's 6E message: preflight, lesson set, QLoRA, packaging as `democritus:<size>-v<N>`, evaluation, overnight mode, a small end-to-end test run first. Do not start a full build.
+2. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
+3. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.
+4. **Step 6C:** weekly or on-demand memory cleanup proposals, applied only with approval.
+5. **Step 6D:** dataset export of highly rated and edited answers plus self-description examples, saved to `<home>\training\`, and a Train page. 6E reuses both. Do not build a second export.
+6. Final: rebuild the installers (`npm run tauri build`), update the README, and report to the operator in the same format as last time.
+7. Then **Step 6E**, as specified in the operator's 6E message: preflight, lesson set, QLoRA, packaging as `democritus:<size>-v<N>`, evaluation, overnight mode, a small end-to-end test run first. Do not start a full build.
 
 ## Operator decisions (binding)
 
@@ -143,7 +134,6 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 
 ## Known issues
 
-- **Icon not applied yet.** `democritus-split-1024.png` isn't in `D:\democritus-app`. There is a `C:\Users\elias\Desktop\democritus-split.svg` (modified 19:46), but the operator asked for the PNG, so it wasn't used. The old "Local Qwen" chat-bubble icon is still in `src-tauri/icons/`.
 - **WebView2 connection (security session, please look):** during a dev run with the privacy flags active (confirmed on the browser process's command line), the browser process (`msedgewebview2.exe`, no `--type`) held a TCP connection to `40.99.44.2:443` (Microsoft address range, no reverse DNS, not in the Windows DNS cache).
   - It was gone a minute later.
   - Next diagnostic: `scripts/dev-e2e.ps1 -ExtraArgs "--log-net-log=<path>\netlog.json --net-log-capture-mode=Default"`, then look for the hostname in the net log.
@@ -173,3 +163,20 @@ node scripts/e2e.mjs --only=identity --models=qwen3.5:4b,qwen3.5:9b
 - Rust needs `%USERPROFILE%\.cargo\bin` on PATH (installed via winget, toolchain `stable-msvc`, rustc 1.99.1).
 - The Ollama tray app is running and serves `127.0.0.1:11434`. The app reuses it and never stops a server it didn't start.
 - Models: `qwen3.5:4b` (3.3 GB), `qwen3.5:9b` (6.6 GB), `qwen3.8:27b` (17.7 GB, about 6.7 tokens/sec, partly on CPU), `qwen3-coder:latest` (18.6 GB MoE, about 39 tokens/sec). Hardware: RTX 5070 with 12 GB VRAM, 32 GB RAM.
+
+## Cloud session (branch `cloud-work`)
+
+Work in this branch was written on a Linux cloud machine. It can't run Ollama, the Qwen models, WebView2 or the Windows build, so everything here is **type-checked and unit-tested only**. Nothing was run against real models.
+
+How it was checked on Linux (no system packages installed):
+- `npx tsc --noEmit` for the UI.
+- `cargo check` for the whole Rust crate, with stub `.pc` files for the GTK/WebKit libraries (`cargo check` never links, so stubs are enough).
+- `cargo test` for every module that doesn't use Tauri, through a small harness crate that includes those files by `#[path]`. Tests in `main.rs`, `memcmds.rs` and `safety_cmds.rs` can't run there; run them on Windows.
+
+### Test on Windows
+
+Run these on the Windows PC after pulling `cloud-work`:
+
+1. `cd src-tauri; cargo test --offline` — all unit tests pass (including `memcmds` tests that the cloud couldn't run).
+2. `npm run build` — the UI type-checks and bundles.
+3. `scripts\dev-e2e.ps1 -Fresh`, then `node scripts/e2e.mjs --only=mem` — the Step 2 memory group (needs `qwen3.5:4b`, and the embedding model for the meaning-search check).
