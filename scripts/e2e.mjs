@@ -362,6 +362,36 @@ async function testUi(cdp, model) {
   report('settings: rejects non-local server URL', badUrl !== 'accepted', badUrl);
 }
 
+async function testIdentity(cdp, models) {
+  const title = await cdp.eval('document.title');
+  const heading = await cdp.eval(`(document.querySelector('#messages .empty h1') ?? {}).textContent ?? ''`);
+  report('identity: app is named Democritus', title === 'Democritus', `title="${title}", heading="${heading}"`);
+  for (const m of models) {
+    await newChat(cdp);
+    await selectModel(cdp, m);
+    await typeAndSend(cdp, 'What are you, and what is your brain right now? Answer in two sentences.');
+    const r = await awaitReply(cdp, 900_000);
+    const answer = r.snap.content.replace(/\s+/g, ' ').trim();
+    report(
+      `identity ${m}: says it is Democritus with a Qwen brain`,
+      r.snap.status === 'complete' && /democritus/i.test(answer) && /qwen/i.test(answer),
+      `"${answer.slice(0, 220)}"`,
+    );
+  }
+}
+
+async function testMigration(cdp) {
+  const convs = await cdp.eval(invoke('list_conversations', { query: null }));
+  const legacy = convs.find((c) => c.title === 'Legacy chat about tomatoes');
+  const msgs = legacy ? await savedMessages(cdp, legacy.id) : [];
+  const settings = await cdp.eval(invoke('get_settings'));
+  report(
+    'migration: old conversations and settings carried over',
+    !!legacy && msgs.length === 2 && settings.systemPrompt.startsWith('Legacy prompt') && settings.temperature === 0.65,
+    `conversation=${!!legacy}, messages=${msgs.length}, prompt="${settings.systemPrompt}", temperature=${settings.temperature}`,
+  );
+}
+
 async function testPersisted(cdp) {
   const convs = await cdp.eval(invoke('list_conversations', { query: null }));
   report('persistence: conversations survive restart', convs.length > 0, `${convs.length} conversations: ${convs.map((c) => c.title).slice(0, 5).join(' | ')}`);
@@ -400,6 +430,8 @@ try {
   const models = args.models ? args.models.split(',') : options.map((o) => o.id);
   const fast = args.fast ?? options[0].id;
 
+  if (ONLY.has('migration')) await testMigration(cdp).catch((e) => report('migration', false, e.message));
+  if (ONLY.has('identity')) await testIdentity(cdp, models).catch((e) => report('identity', false, e.message));
   if (ONLY.has('persisted')) await testPersisted(cdp);
   if (ONLY.has('chat')) {
     for (const m of models) {

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod identity;
 mod llm;
 mod server;
 mod think;
@@ -265,9 +266,7 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
     let _ = on_event.send(StreamEvent::Started { user_message, assistant_message_id: assistant_id });
 
     let mut messages = Vec::with_capacity(history.len() + 1);
-    if !settings.system_prompt.trim().is_empty() {
-        messages.push(json!({ "role": "system", "content": settings.system_prompt }));
-    }
+    messages.push(json!({ "role": "system", "content": identity::system_prompt(&req.model, &settings.system_prompt) }));
     messages.extend(history.into_iter().map(|(role, content)| json!({ "role": role, "content": content })));
 
     let started = Instant::now();
@@ -311,11 +310,35 @@ fn stop_generation(state: State<AppState>, request_id: String) {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            // DEMOCRITUS_DATA_DIR redirects app data for automated tests, so test
+            // runs never touch the operator's real conversations.
+            let (data_dir, log_dir) = match std::env::var_os("DEMOCRITUS_DATA_DIR") {
+                Some(dir) => {
+                    let dir = std::path::PathBuf::from(dir);
+                    (dir.clone(), dir.join("logs"))
+                }
+                None => (app.path().app_data_dir()?, app.path().app_log_dir()?),
+            };
             std::fs::create_dir_all(&data_dir)?;
-            let log_dir = app.path().app_log_dir()?;
             std::fs::create_dir_all(&log_dir)?;
-            let conn = db::open(&data_dir.join("local-qwen.db"))?;
+            let db_path = data_dir.join("democritus.db");
+            // One-time copy from the earlier "Local Qwen" build (%APPDATA%\com.localqwen.desktop).
+            // Tests point DEMOCRITUS_LEGACY_DB at a fixture instead.
+            let legacy = match std::env::var_os("DEMOCRITUS_LEGACY_DB") {
+                Some(p) => Some(std::path::PathBuf::from(p)),
+                None if std::env::var_os("DEMOCRITUS_DATA_DIR").is_none() => {
+                    data_dir.parent().map(|p| p.join("com.localqwen.desktop").join("local-qwen.db"))
+                }
+                None => None,
+            };
+            if let Some(legacy) = legacy {
+                match db::migrate_legacy(&db_path, &legacy) {
+                    Ok(true) => eprintln!("Migrated conversations and settings from {}", legacy.display()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("Could not migrate {}: {e}", legacy.display()),
+                }
+            }
+            let conn = db::open(&db_path)?;
 
             app.manage(AppState {
                 db: Mutex::new(conn),
@@ -350,7 +373,7 @@ fn main() {
             stop_generation,
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build Local Qwen")
+        .expect("failed to build Democritus")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {

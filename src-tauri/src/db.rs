@@ -63,6 +63,18 @@ impl Default for Settings {
     }
 }
 
+/// Copies the database of the earlier "Local Qwen" build into the new location,
+/// once. The old file is only read, never changed or deleted. `VACUUM INTO`
+/// produces a consistent snapshot that includes anything still in the WAL.
+pub fn migrate_legacy(new_db: &Path, legacy_db: &Path) -> rusqlite::Result<bool> {
+    if new_db.exists() || !legacy_db.exists() {
+        return Ok(false);
+    }
+    let old = Connection::open_with_flags(legacy_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    old.execute("VACUUM INTO ?1", params![new_db.to_string_lossy()])?;
+    Ok(true)
+}
+
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;")?;
@@ -301,6 +313,34 @@ mod tests {
         let saved = get_message(&conn, ok).unwrap().unwrap();
         assert_eq!(saved.reasoning, "thinking...");
         assert_eq!(saved.stats.unwrap()["completionTokens"], 3);
+    }
+
+    #[test]
+    fn legacy_database_is_copied_once_and_left_untouched() {
+        let dir = std::env::temp_dir().join(format!("democritus-migrate-{}", now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("local-qwen.db");
+        let new = dir.join("democritus.db");
+        {
+            let old = open(&legacy).unwrap();
+            let c = create_conversation(&old, "Old chat", "qwen3.5:4b").unwrap();
+            insert_message(&old, c.id, "user", "hello from before", "qwen3.5:4b", "complete").unwrap();
+            let mut s = Settings::default();
+            s.system_prompt = "Be terse.".into();
+            save_settings(&old, &s).unwrap();
+        }
+        let legacy_bytes = std::fs::read(&legacy).unwrap();
+
+        assert!(migrate_legacy(&new, &legacy).unwrap());
+        let conn = open(&new).unwrap();
+        let convs = list_conversations(&conn, None).unwrap();
+        assert_eq!(convs[0].title, "Old chat");
+        assert_eq!(get_messages(&conn, convs[0].id).unwrap()[0].content, "hello from before");
+        assert_eq!(get_settings(&conn).system_prompt, "Be terse.");
+        assert_eq!(std::fs::read(&legacy).unwrap(), legacy_bytes, "legacy file unchanged");
+        assert!(!migrate_legacy(&new, &legacy).unwrap(), "second run is a no-op");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

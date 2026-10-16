@@ -364,8 +364,8 @@ function emptyState(): HTMLElement {
   const div = document.createElement('div');
   div.className = 'empty';
   div.innerHTML =
-    `${logo}<h1>Local Qwen</h1>` +
-    `<p class="muted">Chat with Qwen models running on this computer. Nothing leaves your machine.</p>` +
+    `${logo}<h1>Democritus</h1>` +
+    `<p class="muted">Your private assistant. Its brain is the local Qwen model you pick; its identity and memory stay on this computer.</p>` +
     `<ul class="hints"><li><kbd>Enter</kbd> send</li><li><kbd>Shift</kbd> + <kbd>Enter</kbd> new line</li>` +
     `<li><kbd>${modKey}</kbd> + <kbd>N</kbd> new chat</li><li><kbd>Esc</kbd> stop generating</li></ul>` +
     `<p class="muted small">Drop text files anywhere in the window to include them in your message.</p>`;
