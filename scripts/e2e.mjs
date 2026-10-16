@@ -10,6 +10,8 @@
 //      node scripts/e2e.mjs --only=persisted   # after restarting the app
 //
 // Options: --port=9222  --models=a,b  --only=chat,stop,ui,persisted  --shots=<dir>
+//   --skip-big  leaves out the steps that load qwen3.8:27b or qwen3-coder (the
+//               fit dialog in `memory`, the helper fallback in `mem`)
 //   Step 3: --only=continuity, restart the app (without -Fresh), then --only=restart
 
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -24,6 +26,8 @@ const args = Object.fromEntries(
 const PORT = Number(args.port ?? 9222);
 const ONLY = new Set((args.only ?? 'chat,stop,ui').split(','));
 const SHOTS = args.shots ?? null;
+const SKIP_BIG = args['skip-big'] === 'true';
+const EMBED_MODEL = 'qwen3-embedding:0.6b';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -399,9 +403,10 @@ async function testModelMemory(cdp) {
   report('memory: loaded model listed', (await loadedNames()).includes(small), (await loadedNames()).join(', '));
 
   await cdp.eval(`document.querySelector('#loaded-btn').click()`);
-  const row = await waitFor(cdp, `document.querySelector('#loaded-panel .loaded-name')?.textContent`, 5000, 'loaded panel row');
+  // The embedding model (memory search) can be listed too, and may come first.
+  const rows = await waitFor(cdp, `(() => { const r = [...document.querySelectorAll('#loaded-panel .loaded-name')].map(e => e.textContent); return r.length ? r : null; })()`, 5000, 'loaded panel row');
   const foot = await cdp.eval(`document.querySelector('#loaded-panel .popover-foot')?.textContent ?? ''`);
-  report('memory: panel shows model and free RAM/VRAM', row === small && /RAM .* free/.test(foot) && /VRAM/.test(foot), `${row} | ${foot}`);
+  report('memory: panel shows model and free RAM/VRAM', rows.includes(small) && /RAM .* free/.test(foot) && /VRAM/.test(foot), `${rows.join(', ')} | ${foot}`);
   await screenshot(cdp, 'loaded-panel');
   await cdp.eval(`document.body.click()`);
 
@@ -413,7 +418,20 @@ async function testModelMemory(cdp) {
   await typeAndSend(cdp, 'Reply with just the word OK.');
   await awaitReply(cdp, 300_000);
   const afterSwitch = await loadedNames();
-  report('memory: only the new brain is loaded', afterSwitch.length === 1 && afterSwitch[0] === medium, afterSwitch.join(', '));
+  report('memory: only the new brain is loaded', afterSwitch.filter((n) => n !== EMBED_MODEL).join() === medium, afterSwitch.join(', '));
+
+  if (SKIP_BIG) {
+    console.log('SKIP  memory: fit dialog and unload-and-continue with qwen3.8:27b / qwen3-coder (--skip-big)');
+    await cdp.eval(`document.querySelector('#loaded-btn').click()`);
+    // The embedding model's row can come first: use the brain's own Unload button.
+    const unloadBtn = `[...document.querySelectorAll('#loaded-panel .loaded-row')].find(r => r.querySelector('.loaded-name')?.textContent === ${JSON.stringify(medium)})?.querySelector('.unload-btn')`;
+    await waitFor(cdp, unloadBtn, 5000, `unload button for ${medium}`);
+    await cdp.eval(`${unloadBtn}.click()`);
+    await waitFor(cdp, `${invoke('loaded_models')}.then(l => !l.some(m => m.name === ${JSON.stringify(medium)}))`, 30_000, `${medium} unloaded`);
+    report('memory: Unload button frees the model', true, `${medium} unloaded`);
+    await cdp.eval(`document.body.click()`);
+    return;
+  }
 
   // Another program loads the 27B; then ask for qwen3-coder, which can't fit beside it.
   const big = 'qwen3.8:27b';
@@ -573,12 +591,15 @@ async function testMemorySystem(cdp) {
     const o = await call('get_operator');
     await call('save_operator', { settings: { ...o, ...patch } });
   };
-  // Waits for the newest proposal created after `afterId` to leave queued/running.
+  // Waits for the proposal of the last exchange (created after `afterId`, for
+  // that conversation) to leave queued/running. Jobs left over from other groups'
+  // chats belong to other conversations and are ignored.
+  let lastConversation = null;
   const waitProposal = async (afterId, timeoutMs = 600_000) => {
     await call('memory_kick');
     return waitFor(
       cdp,
-      `${invoke('memory_proposals', { status: null })}.then(l => l.find(p => p.id > ${afterId} && !['queued', 'running'].includes(p.status)) ?? null)`,
+      `${invoke('memory_proposals', { status: null })}.then(l => l.find(p => p.id > ${afterId} && p.conversationId === ${lastConversation} && !['queued', 'running'].includes(p.status)) ?? null)`,
       timeoutMs,
       'memory proposal',
     );
@@ -588,7 +609,9 @@ async function testMemorySystem(cdp) {
     await newChat(cdp);
     await selectModel(cdp, model);
     await typeAndSend(cdp, text);
-    return awaitReply(cdp, 900_000);
+    const r = await awaitReply(cdp, 900_000);
+    lastConversation = await activeConversationId(cdp);
+    return r;
   };
 
   // Layout.
@@ -701,11 +724,15 @@ async function testMemorySystem(cdp) {
   report('memory: Lockdown blocks memory writes', !blocked.ok && /paused|Lockdown/i.test(blocked.e), blocked.e);
 
   // Fallback rule: the 27B brain leaves no room for the 4B helper.
-  before = await lastProposalId();
-  await exchange('qwen3.8:27b', 'Garden Planner: add a note that we want a printable PDF export later. One short sentence, please.');
-  p = await waitProposal(before, 1_200_000);
-  report('memory: helper fallback with a large brain', ['pending', 'empty', 'applied'].includes(p.status), `written by ${p.model} (helper qwen3.5:4b); ${p.note || ''}`);
-  if (p.status === 'pending') await call('memory_reject', { id: p.id });
+  if (SKIP_BIG) {
+    console.log('SKIP  memory: helper fallback with a large brain (--skip-big)');
+  } else {
+    before = await lastProposalId();
+    await exchange('qwen3.8:27b', 'Garden Planner: add a note that we want a printable PDF export later. One short sentence, please.');
+    p = await waitProposal(before, 1_200_000);
+    report('memory: helper fallback with a large brain', ['pending', 'empty', 'applied'].includes(p.status), `written by ${p.model} (helper qwen3.5:4b); ${p.note || ''}`);
+    if (p.status === 'pending') await call('memory_reject', { id: p.id });
+  }
 
   // Reset everything learned (with backup).
   await cdp.eval(`document.querySelector('.rail-btn[data-page=memory]').click()`);

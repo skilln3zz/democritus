@@ -87,8 +87,12 @@ pub async fn unload(http: &reqwest::Client, base: &str, model: &str) -> Result<(
 }
 
 /// One non-streaming chat call whose answer must match `schema` (Ollama
-/// structured outputs). Thinking is off: background jobs want the answer only.
-/// `num_ctx` None keeps the model's current context so a loaded brain isn't reloaded.
+/// structured outputs), at temperature 0. Thinking is off: background jobs want
+/// the answer only. `num_predict` caps the answer's length so a looping model
+/// can't run until the context is full; an answer cut off at the cap is an
+/// error, never half-parsed JSON. `num_ctx` None keeps the model's current
+/// context so a loaded brain isn't reloaded.
+#[allow(clippy::too_many_arguments)]
 pub async fn chat_json(
     http: &reqwest::Client,
     base: &str,
@@ -96,9 +100,10 @@ pub async fn chat_json(
     messages: &[Value],
     schema: &Value,
     num_ctx: Option<u32>,
+    num_predict: u32,
     keep_alive: &str,
 ) -> Result<Value, String> {
-    let mut options = json!({ "temperature": 0.2 });
+    let mut options = json!({ "temperature": 0, "num_predict": num_predict });
     if let Some(n) = num_ctx {
         options["num_ctx"] = json!(n);
     }
@@ -119,7 +124,14 @@ pub async fn chat_json(
             resp = post(http, base, &body).await?;
         }
     }
-    let v = resp?;
+    json_answer(model, &resp?, num_predict)
+}
+
+/// The JSON in a `/api/chat` response, refusing an answer that hit the length cap.
+fn json_answer(model: &str, v: &Value, num_predict: u32) -> Result<Value, String> {
+    if v["done_reason"].as_str() == Some("length") {
+        return Err(format!("{model}'s answer was cut off at the {num_predict}-token limit"));
+    }
     let text = v["message"]["content"].as_str().unwrap_or_default();
     serde_json::from_str(text).map_err(|e| format!("{model} did not return valid JSON: {e}"))
 }
@@ -296,6 +308,17 @@ mod tests {
         let v = json!({ "model_info": { "qwen35moe.context_length": 32768 } });
         assert_eq!(parse_context_limit(&v), Some(32768));
         assert_eq!(parse_context_limit(&json!({})), None);
+    }
+
+    #[test]
+    fn json_answers_cut_off_or_broken_are_refused() {
+        let ok = json!({ "message": { "content": "{\"a\": 1}" }, "done_reason": "stop" });
+        assert_eq!(json_answer("m", &ok, 100).unwrap(), json!({ "a": 1 }));
+        // Valid-looking JSON that stopped at the cap is still refused.
+        let cut = json!({ "message": { "content": "{\"a\": 1}" }, "done_reason": "length" });
+        assert!(json_answer("m", &cut, 100).unwrap_err().contains("cut off at the 100-token limit"));
+        let broken = json!({ "message": { "content": "{\"a\": \"unterminated" }, "done_reason": "stop" });
+        assert!(json_answer("m", &broken, 100).unwrap_err().contains("did not return valid JSON"));
     }
 
     #[test]

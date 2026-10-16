@@ -12,7 +12,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 1 | Identity and rename | **Done** (commit `3868323`), except the icon (see Known issues) |
 | 4 | Model memory management | **Done** (commit `fc98a8b`) |
 | 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
-| 2 | Home folder and memory | **Code complete** (commit `24704c0`). **Windows run fails:** the memory helper (`qwen3.5:4b`) doesn't reliably produce usable proposals, and meaning search misses the test note. See "Windows test run, 2026-10-17" |
+| 2 | Home folder and memory | **Verified on Windows** 2026-10-17 after the helper and search fixes: `mem` 20/20 on its own, and again inside the full 4B/9B regression. See "Step 2 fixes, 2026-10-17" |
 | 3 | Continuity across model switches | **Verified on Windows** 2026-10-17: `continuity` 10/10, `restart` 6/6 |
 | UI | "Bohemian dusk" redesign, theme switch, Security check (design/UI-SPEC.md) | **Verified on Windows** 2026-10-17 (automated parts): `ui` group and the redesign checks pass; the firewall fix (UAC) and the `OLLAMA_HOST` fix still need the operator |
 | 6A | Hardware auto-tuning | Not started |
@@ -142,9 +142,31 @@ Run on the PC (RTX 5070 12 GB, 32 GB RAM, Ollama 0.40.2) against the four real m
 
 **Still needs the operator:** the Security check fixes that change system settings (the `OLLAMA_HOST=0.0.0.0` test and its fix; "Create rules" with the UAC prompt), the firewall download exception (`e608e40`) with a real approved download, the attach button's native file picker, the Windows dark/light switch itself (only emulated here), and the VRAM comparison in Task Manager.
 
+## Step 2 fixes, 2026-10-17
+
+- **Memory helper can't run away or save a broken proposal** (`ollama.rs` `chat_json`, `memcmds.rs`):
+  - Temperature 0, and a `num_predict` cap (4096 for proposals, 1536 for summaries).
+  - The schema bounds every string and the list (`maxLength`, `maxItems`). Ollama 0.40 enforces both; checked directly.
+  - An answer stopped by the cap (`done_reason: "length"`) is an error, even if it happens to parse.
+  - Parsing is strict: a missing field, a wrong type or an extra field is an error, no longer a silent empty proposal.
+  - **Retry and fallback.** An unusable answer gets one retry that tells the model what went wrong (at temperature 0 the same question would get the same answer). If that fails too, the current brain gets one try, if it fits in memory. If that fails, the job is marked `failed` with nothing saved, and logged as "memory update skipped, nothing saved". Each unusable answer is logged as "memory proposal unusable".
+- **current_state.md is a required part of every answer.** The schema has a `current_state` object with `active_project`, `last_task`, `open_questions` and `next_step`; `""` leaves a section unchanged. Each filled field becomes a `replace_section`. The 4B left out current_state.md in every earlier run when it was one rule among many.
+- **Meaning search** (`memindex.rs` `fuse`): weighted reciprocal rank fusion with k = 5 (was 60) and the meaning list weighted ×2.
+  - Measured on the test's notes with five queries: the old fusion placed the answer at ranks 4, 1, 11, 1, 2; the new one at 3, 1, 3, 1, 1.
+  - Exact terms ("zucchini balcony", "metric units") still come first.
+  - Dropping stopwords from the keyword query was tried and made it worse: without stemming, "grow" doesn't match "Grows".
+- **Tests:** 80 unit tests (new: cut-off and broken answers, strict parsing, schema bounds, fusion). In `scripts/e2e.mjs`:
+  - the "In memory" check accepts the embedding model in the list;
+  - `mem` waits for its own conversation's proposal, so leftover jobs from other groups can't be mistaken for it;
+  - new `--skip-big` option leaves out the steps that load the 27B or qwen3-coder.
+
+**Regression after the fixes** (fresh data, `--only=identity,memory,safety,mem,chat,stop,ui --models=qwen3.5:4b,qwen3.5:9b --skip-big`): 54/55, and the one failure was a bug in the new `--skip-big` path (it unloaded the embedding model's row). Fixed; `--only=memory --skip-big` then 8/8.
+- Of the 5 failures in the 56-check run, none came back: panel row (test fixed), helper proposal and the `mem` crash (fixed), meaning search (fixed), Ctrl+N timeout (didn't recur).
+- Not run this time, on purpose: identity and chat on the 27B and qwen3-coder, the fit dialog with the 27B loaded, and the large-brain helper fallback inside the full regression. `mem` run on its own did include that fallback and passed.
+
 ## Exact next steps
 
-1. **Step 2 fixes:** make the memory helper reliable with `qwen3.5:4b` (failure 1), decide on meaning search (failure 2), update the out-of-date `memory` panel check (failure 3), then re-run `--only=mem` on fresh data until the whole group passes.
+1. **Re-run with the big models** when enough RAM is free: `--only=memory` without `--skip-big` (the fit dialog), and `--only=identity,chat` on the 27B and qwen3-coder.
 2. **Operator:** the "Still needs the operator" items above.
 3. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
 4. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.

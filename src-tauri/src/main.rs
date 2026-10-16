@@ -389,7 +389,10 @@ pub(crate) async fn chat_num_ctx(state: &AppState, model: &str) -> Option<u32> {
     Some(want.min(limit).max(2048))
 }
 
-const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}"#;
+// The prompt asks for about 300 words; the length limits keep a looping model
+// from filling the whole window.
+const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string","maxLength":4000}},"required":["summary"]}"#;
+const SUMMARY_NUM_PREDICT: u32 = 1536;
 
 /// Folds `turns` into the conversation's running summary with the current brain.
 async fn summarize(state: &AppState, model: &str, num_ctx: u32, previous: &str, turns: &[context::Turn]) -> CmdResult<String> {
@@ -402,7 +405,7 @@ async fn summarize(state: &AppState, model: &str, num_ctx: u32, previous: &str, 
         json!({ "url": format!("{}/api/chat", ollama::origin(&base)), "model": model, "purpose": "summarize older messages", "messages": turns.len() }),
     );
     let schema: Value = serde_json::from_str(SUMMARY_SCHEMA).expect("valid schema");
-    let v = ollama::chat_json(&state.http, &base, model, &messages, &schema, Some(num_ctx), "5m").await?;
+    let v = ollama::chat_json(&state.http, &base, model, &messages, &schema, Some(num_ctx), SUMMARY_NUM_PREDICT, "5m").await?;
     let summary = v["summary"].as_str().unwrap_or_default().trim().to_string();
     if summary.is_empty() {
         return Err(format!("{model} returned an empty summary"));
