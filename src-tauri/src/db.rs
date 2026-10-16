@@ -46,6 +46,8 @@ pub struct Settings {
     pub temperature: f64,
     pub max_tokens: u32,
     pub default_model: String,
+    /// Democritus's home folder; empty means the default (D:\Democritus).
+    pub home_dir: String,
 }
 
 impl Default for Settings {
@@ -59,6 +61,7 @@ impl Default for Settings {
             // Thinking tokens count toward this limit, so keep it generous.
             max_tokens: 8192,
             default_model: String::new(),
+            home_dir: String::new(),
         }
     }
 }

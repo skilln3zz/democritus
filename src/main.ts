@@ -11,16 +11,14 @@ import {
 } from './api';
 import { renderMarkdown } from './markdown';
 import { icons, logo } from './icons';
+import { initLogPage } from './logpage';
+import { initOperatorPage, loadOperator } from './operatorpage';
+import { initRail, showPage } from './pages';
+import { $, askConfirm, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
 
 const isMac = navigator.userAgent.includes('Mac');
 const modKey = isMac ? '⌘' : 'Ctrl';
 const MAX_FILE_BYTES = 1_000_000;
-
-function $<T extends HTMLElement = HTMLElement>(selector: string): T {
-  const el = document.querySelector<T>(selector);
-  if (!el) throw new Error(`Missing element ${selector}`);
-  return el;
-}
 
 const els = {
   newChat: $<HTMLButtonElement>('#new-chat'),
@@ -53,6 +51,7 @@ const els = {
   setUrl: $<HTMLInputElement>('#set-url'),
   setCmd: $<HTMLInputElement>('#set-cmd'),
   setAutostart: $<HTMLInputElement>('#set-autostart'),
+  setHome: $<HTMLInputElement>('#set-home'),
   confirmDialog: $<HTMLDialogElement>('#confirm-dialog'),
   confirmText: $('#confirm-text'),
   confirmActions: $('#confirm-actions'),
@@ -96,84 +95,6 @@ const state = {
 const messageOf = new WeakMap<HTMLElement, Message>();
 
 // ---------- helpers ----------
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-function errorText(e: unknown): string {
-  if (typeof e === 'string') return e;
-  if (e instanceof Error) return e.message;
-  return JSON.stringify(e);
-}
-
-function newRequestId(): string {
-  return typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function formatBytes(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
-  return `${n} B`;
-}
-
-/** RAM/VRAM amounts in binary GB, matching Task Manager ("32 GB RAM", "12 GB VRAM"). */
-function formatMem(n: number): string {
-  const gib = n / 1024 ** 3;
-  return gib >= 1 ? `${gib.toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
-}
-
-function relativeTime(ms: number): string {
-  const d = new Date(ms);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (now.getTime() - ms < 6 * 86_400_000) return d.toLocaleDateString([], { weekday: 'short' });
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-function toast(text: string, kind: 'info' | 'error' = 'info', ms = 4500) {
-  const t = document.createElement('div');
-  t.className = `toast ${kind}`;
-  t.textContent = text;
-  els.toasts.append(t);
-  setTimeout(() => t.classList.add('leaving'), ms);
-  setTimeout(() => t.remove(), ms + 300);
-}
-
-interface Choice {
-  value: string;
-  label: string;
-  kind?: 'primary' | 'danger';
-}
-
-/** Modal with custom buttons; resolves to the chosen value ('cancel' on Esc). */
-function choose(text: string, choices: Choice[]): Promise<string> {
-  els.confirmText.textContent = text;
-  els.confirmActions.replaceChildren(
-    ...choices.map((c) => {
-      const b = document.createElement('button');
-      b.type = 'submit';
-      b.value = c.value;
-      b.className = `btn ${c.kind ?? ''}`;
-      b.textContent = c.label;
-      return b;
-    }),
-  );
-  els.confirmDialog.returnValue = '';
-  els.confirmDialog.showModal();
-  return new Promise((resolve) =>
-    els.confirmDialog.addEventListener('close', () => resolve(els.confirmDialog.returnValue || 'cancel'), { once: true }),
-  );
-}
-
-async function askConfirm(text: string, action = 'Delete'): Promise<boolean> {
-  const c = await choose(text, [
-    { value: 'cancel', label: 'Cancel' },
-    { value: 'ok', label: action, kind: 'danger' },
-  ]);
-  return c === 'ok';
-}
 
 function nearBottom(): boolean {
   const m = els.messages;
@@ -264,12 +185,6 @@ function renderLoaded() {
   els.loadedBtn.innerHTML = `${icons.chip}<span>${escapeText(label)}</span>`;
   els.loadedBtn.dataset.count = String(n);
   if (!els.loadedPanel.hidden) void renderLoadedPanel();
-}
-
-function escapeText(s: string): string {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 async function renderLoadedPanel() {
@@ -872,6 +787,8 @@ function openSettings() {
   els.setUrl.value = s.baseUrl;
   els.setCmd.value = s.serverCommand;
   els.setAutostart.checked = s.autoStartServer;
+  els.setHome.value = s.homeDir;
+  void api.appPaths().then((p) => (els.setHome.placeholder = p.home));
   els.settingsError.hidden = true;
   els.settingsDialog.showModal();
   els.setSystem.focus();
@@ -895,6 +812,7 @@ async function saveSettings(e: SubmitEvent) {
     baseUrl: els.setUrl.value,
     serverCommand: els.setCmd.value,
     autoStartServer: els.setAutostart.checked,
+    homeDir: els.setHome.value.trim(),
   };
   try {
     state.settings = await api.saveSettings(next);
@@ -1036,7 +954,10 @@ window.addEventListener('keydown', (e) => {
   const dialogOpen = document.querySelector('dialog[open]') !== null;
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
-    if (!dialogOpen) newChat();
+    if (!dialogOpen) {
+      showPage('chat');
+      newChat();
+    }
   } else if (e.key === 'Escape' && state.generation && !dialogOpen) {
     e.preventDefault();
     void stop();
@@ -1045,6 +966,10 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('focus', () => void pollStatus());
 
 async function init() {
+  initRail();
+  initLogPage();
+  initOperatorPage();
+  void loadOperator().catch((e) => toast(`Couldn't load operator settings: ${errorText(e)}`, 'error'));
   els.newChat.innerHTML = `${icons.plus}<span>New chat</span>`;
   els.newChat.title = `New chat (${modKey}+N)`;
   els.refreshModels.innerHTML = icons.refresh;

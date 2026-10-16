@@ -8,6 +8,15 @@
   </head>
   <body>
     <div id="app">
+      <nav id="rail" aria-label="Pages">
+        <button class="rail-btn active" type="button" data-page="chat"><span class="rail-icon" data-icon="chat"></span><span>Chat</span></button>
+        <button class="rail-btn" type="button" data-page="log"><span class="rail-icon" data-icon="log"></span><span>Log</span></button>
+        <button class="rail-btn" type="button" data-page="operator"><span class="rail-icon" data-icon="shield"></span><span>Operator</span></button>
+        <div class="rail-spacer"></div>
+        <button id="lockdown-btn" class="rail-btn lockdown" type="button" title="Lockdown: block all internet access and pause learning">
+          <span class="rail-icon" data-icon="lock"></span><span class="lockdown-label">Lockdown</span>
+        </button>
+      </nav>
       <aside id="sidebar">
         <div class="sidebar-top">
           <button id="new-chat" class="btn primary block" type="button"></button>
@@ -37,6 +46,9 @@
           <button id="open-settings" class="icon-btn" type="button" title="Settings"></button>
         </header>
 
+        <div id="lockdown-banner" class="banner lockdown-banner" hidden>
+          <span class="banner-text">Lockdown is on: all internet access is blocked, and learning and memory writing are paused. Chat with the local model still works.</span>
+        </div>
         <div id="banner" class="banner" hidden>
           <span class="banner-text"></span>
           <button id="banner-start" class="btn small" type="button">Start server</button>
@@ -56,7 +68,85 @@
 
         <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
       </main>
+
+      <section id="page-log" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Activity log</h1>
+            <p class="muted small">Every network request, download, approval, memory change and setting change. Stored only on this computer in <code id="log-path"></code>.</p>
+          </div>
+        </header>
+        <div class="page-tools">
+          <select id="log-kind">
+            <option value="">All events</option>
+            <option value="network">Network</option>
+            <option value="download">Downloads</option>
+            <option value="approval">Approvals</option>
+            <option value="memory">Memory</option>
+            <option value="setting">Settings</option>
+            <option value="security">Security</option>
+            <option value="model">Models</option>
+          </select>
+          <input id="log-search" type="search" placeholder="Filter…" spellcheck="false" />
+          <button id="log-refresh" class="btn small" type="button">Refresh</button>
+        </div>
+        <div class="page-body">
+          <table class="log-table">
+            <thead><tr><th>Time</th><th>Kind</th><th>Event</th><th>Details</th></tr></thead>
+            <tbody id="log-rows"></tbody>
+          </table>
+          <p id="log-empty" class="muted small" hidden>No matching events.</p>
+        </div>
+      </section>
+
+      <section id="page-operator" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Operator</h1>
+            <p class="muted small">You are the operator. These permissions are enforced by the app itself. Nothing in a chat, a dropped file, a memory file or a model's output can change them. Everything starts off.</p>
+          </div>
+        </header>
+        <div class="page-body narrow">
+          <div class="card">
+            <h2>Permissions</h2>
+            <div id="op-toggles"></div>
+          </div>
+          <div class="card">
+            <h2>Download allowlist</h2>
+            <p class="muted small">Model files may only come from these addresses (one per line, https only). Only <code>.gguf</code> and <code>.safetensors</code> are accepted; pickle formats (<code>.bin</code>, <code>.pt</code>, <code>.pkl</code>) and executables are always refused.</p>
+            <textarea id="op-allowlist" rows="3" spellcheck="false"></textarea>
+            <div class="row-end"><button id="op-allowlist-save" class="btn small" type="button">Save allowlist</button></div>
+          </div>
+          <div class="card">
+            <h2>Download a model file</h2>
+            <p class="muted small">Paste a link to a file. Democritus asks you twice: once to look up its size and checksum, then to download it. Each approval works once. Files go to <code id="op-downloads-path"></code>.</p>
+            <div class="inline-form">
+              <input id="op-download-url" type="text" placeholder="https://huggingface.co/Qwen/…/resolve/main/….gguf" spellcheck="false" />
+              <button id="op-download-btn" class="btn primary small" type="button">Check</button>
+            </div>
+            <p id="op-download-hint" class="muted small"></p>
+            <div id="op-download-status" class="small" hidden></div>
+          </div>
+          <div class="card">
+            <h2>Network</h2>
+            <p class="muted small">Democritus is offline by default: it talks only to the model server on this computer. It has no telemetry, analytics, crash reporting or update checks, and the window's built-in browser engine runs with its background services switched off. The only way to reach the internet is a download you approve above.</p>
+          </div>
+        </div>
+      </section>
     </div>
+
+    <dialog id="approval-dialog">
+      <form method="dialog">
+        <h2>Approve internet access?</h2>
+        <p id="approval-what" class="muted small"></p>
+        <dl id="approval-details" class="details"></dl>
+        <p class="muted small">This approval works once. Nothing is sent until you approve.</p>
+        <div class="dialog-actions">
+          <button class="btn" value="deny" type="submit">Deny</button>
+          <button class="btn primary" value="approve" type="submit">Approve</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="settings-dialog">
       <form id="settings-form" method="dialog">
@@ -91,6 +181,10 @@
             <span>Start the server when the app launches if it isn't running</span>
           </label>
         </fieldset>
+        <label class="field">
+          <span>Democritus home folder (memory, logs, training data). Leave empty for the default.</span>
+          <input id="set-home" type="text" spellcheck="false" autocomplete="off" />
+        </label>
         <p id="settings-error" class="form-error" hidden></p>
         <div class="dialog-actions">
           <button class="btn" type="button" id="settings-cancel">Cancel</button>

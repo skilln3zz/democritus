@@ -1,15 +1,22 @@
 // Hide the console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
 mod db;
+mod home;
 mod identity;
+mod internet;
 mod llm;
+mod localtime;
 mod ollama;
+mod operator;
+mod safety_cmds;
 mod server;
 mod sysmem;
 mod think;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -19,12 +26,22 @@ use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tokio::sync::Notify;
 
-struct AppState {
+pub struct AppState {
     db: Mutex<rusqlite::Connection>,
+    /// Plain-HTTP client for the local model server (loopback only).
     http: reqwest::Client,
+    /// The only client that may reach the internet, used solely for approved downloads.
+    internet: reqwest::Client,
     server: server::ServerManager,
     /// Cancellation handles for in-flight generations, keyed by request id.
     active: Mutex<HashMap<String, Arc<Notify>>>,
+    home: Mutex<PathBuf>,
+    activity: activity::ActivityLog,
+    approvals: operator::Approvals,
+    /// Notified by Lockdown to abort any download in progress.
+    download_cancel: Notify,
+    /// Mirror of the Lockdown setting, checked on hot paths.
+    lockdown: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -34,6 +51,18 @@ impl AppState {
 
     fn settings(&self) -> db::Settings {
         db::get_settings(&self.db())
+    }
+
+    fn operator(&self) -> operator::OperatorSettings {
+        operator::load(&self.db())
+    }
+
+    fn home(&self) -> PathBuf {
+        self.home.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    fn log(&self, kind: &str, action: &str, detail: Value) {
+        self.activity.log(kind, action, detail);
     }
 
     fn cancel_handle(&self, request_id: &str) -> Arc<Notify> {
@@ -73,7 +102,19 @@ fn save_settings(state: State<AppState>, settings: db::Settings) -> CmdResult<db
         return Err("Max tokens must be between 1 and 262144.".into());
     }
     s.server_command = s.server_command.trim().to_string();
+    s.home_dir = s.home_dir.trim().to_string();
+    let before = state.settings();
     db::save_settings(&state.db(), &s).map_err(err)?;
+    let changes = activity::diff(&before, &s);
+    if !changes.is_empty() {
+        state.log("setting", "settings changed", Value::Object(changes));
+    }
+    if before.home_dir != s.home_dir {
+        let new_home = home::resolve(&s.home_dir);
+        *state.home.lock().unwrap_or_else(|p| p.into_inner()) = new_home.clone();
+        state.activity.set_dir(home::logs_dir(&new_home));
+        state.log("setting", "home folder changed", json!({ "home": new_home.display().to_string() }));
+    }
     Ok(s)
 }
 
@@ -92,6 +133,7 @@ async fn server_status(state: State<'_, AppState>) -> CmdResult<server::ServerSt
 #[tauri::command]
 async fn start_server(state: State<'_, AppState>) -> CmdResult<server::ServerStatus> {
     let s = state.settings();
+    state.log("model", "start model server requested", json!({ "command": s.server_command, "url": s.base_url }));
     state.server.ensure_running(&state.http, &s.base_url, &s.server_command).await?;
     Ok(state.server.status(&state.http, &s.base_url).await)
 }
@@ -115,7 +157,9 @@ async fn loaded_models(state: State<'_, AppState>) -> CmdResult<Vec<ollama::Load
 #[tauri::command]
 async fn unload_model(state: State<'_, AppState>, model: String) -> CmdResult<()> {
     let base = state.settings().base_url;
-    ollama::unload(&state.http, &base, &model).await
+    let result = ollama::unload(&state.http, &base, &model).await;
+    state.log("model", "unload", json!({ "model": model, "url": format!("{}/api/generate", ollama::origin(&base)), "ok": result.is_ok() }));
+    result
 }
 
 #[tauri::command]
@@ -320,6 +364,11 @@ async fn run_chat(state: &AppState, req: &SendRequest, cancel: &Notify, on_event
     messages.push(json!({ "role": "system", "content": identity::system_prompt(&req.model, &settings.system_prompt) }));
     messages.extend(history.into_iter().map(|(role, content)| json!({ "role": role, "content": content })));
 
+    state.log(
+        "network",
+        "local model request",
+        json!({ "url": format!("{}/chat/completions", settings.base_url), "model": req.model, "conversation": req.conversation_id, "messages": messages.len() }),
+    );
     let started = Instant::now();
     let mut acc = Accumulator::new(on_event);
     let request = llm::ChatRequest {
@@ -390,18 +439,28 @@ fn main() {
                 }
             }
             let conn = db::open(&db_path)?;
+            let home_dir = home::resolve(&db::get_settings(&conn).home_dir);
+            let lockdown = operator::load(&conn).lockdown;
 
             app.manage(AppState {
                 db: Mutex::new(conn),
                 http: llm::client(),
+                internet: internet::client(),
                 server: server::ServerManager::new(log_dir.join("model-server.log")),
                 active: Mutex::new(HashMap::new()),
+                activity: activity::ActivityLog::new(home::logs_dir(&home_dir)),
+                home: Mutex::new(home_dir.clone()),
+                approvals: operator::Approvals::default(),
+                download_cancel: Notify::new(),
+                lockdown: std::sync::atomic::AtomicBool::new(lockdown),
             });
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
                 let s = state.settings();
+                let op = state.operator();
+                state.log("security", "app started", json!({ "home": state.home().display().to_string(), "lockdown": op.lockdown }));
                 if s.auto_start_server {
                     let _ = state.server.ensure_running(&state.http, &s.base_url, &s.server_command).await;
                 }
@@ -426,6 +485,13 @@ fn main() {
             get_messages,
             send_message,
             stop_generation,
+            safety_cmds::app_paths,
+            safety_cmds::get_operator,
+            safety_cmds::save_operator,
+            safety_cmds::set_lockdown,
+            safety_cmds::read_activity,
+            safety_cmds::request_download,
+            safety_cmds::respond_approval,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")

@@ -9,6 +9,7 @@ export interface Settings {
   temperature: number;
   maxTokens: number;
   defaultModel: string;
+  homeDir: string;
 }
 
 export interface ModelInfo {
@@ -90,6 +91,55 @@ export interface FitReport {
   memory: MemoryInfo;
 }
 
+export interface OperatorSettings {
+  lockdown: boolean;
+  allowDownloads: boolean;
+  downloadAllowlist: string[];
+  autoApplyMemory: boolean;
+  memoryPaused: boolean;
+  allowAutoModelSelect: boolean;
+  allowTraining: boolean;
+}
+
+export interface AppPaths {
+  home: string;
+  memory: string;
+  logs: string;
+  training: string;
+  downloads: string;
+}
+
+export interface ActivityEntry {
+  ts: number;
+  time: string;
+  kind: string;
+  action: string;
+  detail: unknown;
+}
+
+export interface Approval {
+  id: string;
+  kind: 'lookup' | 'download';
+  url: string;
+  fileName: string;
+  sizeBytes: number | null;
+  sha256: string | null;
+  servedFrom: string | null;
+  createdMs: number;
+}
+
+export interface DownloadResult {
+  path: string;
+  sizeBytes: number;
+  sha256: string;
+  checksumMatches: boolean | null;
+}
+
+export type ApprovalOutcome =
+  | { type: 'denied' }
+  | { type: 'needsApproval'; approval: Approval }
+  | { type: 'downloaded'; result: DownloadResult };
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -119,4 +169,16 @@ export const api = {
     return invoke<void>('send_message', { req, onEvent: channel });
   },
   stopGeneration: (requestId: string) => invoke<void>('stop_generation', { requestId }),
+  appPaths: () => invoke<AppPaths>('app_paths'),
+  getOperator: () => invoke<OperatorSettings>('get_operator'),
+  saveOperator: (settings: OperatorSettings) => invoke<OperatorSettings>('save_operator', { settings }),
+  setLockdown: (on: boolean) => invoke<OperatorSettings>('set_lockdown', { on }),
+  readActivity: (limit: number, kind: string, query: string) =>
+    invoke<ActivityEntry[]>('read_activity', { limit, kind: kind || null, query: query || null }),
+  requestDownload: (url: string) => invoke<Approval>('request_download', { url }),
+  respondApproval: (id: string, approve: boolean, onProgress: (p: { done: number; total: number | null }) => void) => {
+    const channel = new Channel<{ done: number; total: number | null }>();
+    channel.onmessage = onProgress;
+    return invoke<ApprovalOutcome>('respond_approval', { id, approve, onProgress: channel });
+  },
 };

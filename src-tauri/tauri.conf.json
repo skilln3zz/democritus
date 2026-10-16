@@ -19,7 +19,8 @@
         "minWidth": 760,
         "minHeight": 500,
         "center": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeSync,OptimizationHints,Translate,AutofillServerCommunication,MediaRouter,DialMediaRouteProvider,CertificateTransparencyComponentUpdater --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --disable-client-side-phishing-detection --no-pings --metrics-recording-only --disable-breakpad"
       }
     ],
     "security": {
