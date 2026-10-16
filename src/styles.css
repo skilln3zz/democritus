@@ -168,10 +168,12 @@ code {
 }
 
 /* ---------- app frame: the dusk photo behind everything ---------- */
+/* Pinned to the viewport, so focus moves or scrollIntoView can never shift the frame. */
 #app {
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
   min-height: 0;
   padding: 22px;
   background-color: #16203a;
@@ -349,7 +351,7 @@ section.page {
 .brain-picker select,
 .project-picker select {
   min-width: 0;
-  max-width: 260px;
+  max-width: 300px;
   padding: 0 18px 0 0;
   border: 0;
   outline: none;
@@ -2294,6 +2296,60 @@ dl.details dd {
   .panel,
   .paper-page {
     overflow: visible;
+  }
+}
+
+/* Short windows (down to the 700 px minimum): tighter frame and bands so the
+   conversation list and messages keep their room. */
+@media (max-height: 820px) {
+  #app {
+    padding: 14px;
+  }
+  section.page,
+  .page-row,
+  #main {
+    gap: 12px;
+  }
+  .band {
+    padding: 10px 20px 32px;
+    gap: 12px;
+  }
+  .band-left,
+  .band-right {
+    gap: 4px;
+  }
+  .wordmark {
+    font-size: clamp(28px, 3vw, 40px);
+  }
+  .brain-picker {
+    height: 38px;
+  }
+  .project-picker {
+    height: 30px;
+  }
+  .panel {
+    gap: 12px;
+    padding: 16px 14px;
+  }
+  #new-chat {
+    min-height: 40px;
+  }
+  .nav-link {
+    min-height: 32px;
+  }
+  .side-nav {
+    padding-top: 8px;
+  }
+  .composer-band {
+    gap: 6px;
+    padding: 32px 20px 12px;
+  }
+  #input {
+    font-size: 20px;
+  }
+  .send-diamond {
+    width: 42px;
+    height: 42px;
   }
 }
 

@@ -13,7 +13,8 @@ Built with [Tauri 2](https://tauri.app): the backend is Rust, and the UI is plai
 - Markdown rendering, with syntax-highlighted code blocks and a **Copy** button on each one.
 - Drag text files into the window to include their contents in your message (up to 1 MB per file).
 - Settings for the system prompt, temperature, max tokens, server URL and server start command.
-- Light and dark mode that follow your system theme.
+- The "Bohemian dusk" look (design/UI-SPEC.md): cream paper panels over a dusk city photo. **Light, Dark or Follow system**, chosen under Settings & safety → Appearance and saved with the other settings.
+- A **Security check** under Settings & safety: whether Ollama listens only on 127.0.0.1, whether `OLLAMA_HOST` is local, Windows Firewall outbound block rules for Democritus and Ollama, the Ollama version, Lockdown and download permission, and whether model files are only `.gguf` / `.safetensors`. Fix buttons show the exact PowerShell commands and run nothing until you confirm.
 - A server status indicator. The app starts the model server if it isn't running, and stops it on exit **only if the app started it**.
 - Clear error messages, e.g. when a model needs more memory than you have.
 
@@ -99,7 +100,7 @@ Deleting the database removes all conversations and settings.
 ## Privacy
 
 - The Rust HTTP client is compiled **without any TLS support** and ignores proxy settings, so it can't reach an `https://` endpoint. The server URL is also validated to be a loopback address.
-- All frontend libraries are bundled. There are no CDNs and no web fonts. The Content Security Policy only allows Tauri's IPC: no external `connect-src`, and no remote images. Markdown images are disabled, and links in replies don't navigate anywhere.
+- All frontend libraries are bundled. There are no CDNs. The fonts (Italiana, Manrope, IBM Plex Mono, SIL Open Font License) come from the `@fontsource` npm packages and are bundled with the app. The Content Security Policy only allows Tauri's IPC: no external `connect-src`, and no remote images. Markdown images are disabled, and links in replies don't navigate anywhere.
 
 ## Tests
 
@@ -130,17 +131,23 @@ The E2E suite sends a message to each model. It checks that replies stream and a
 ## Project layout
 
 ```
+public/theme-boot.js applies the saved theme before the first paint
 src/                 UI (TypeScript, no framework)
-  main.ts            app state, rendering, shortcuts, drag & drop
+  main.ts            app state, chat page, shortcuts, drag & drop
   api.ts             typed wrappers for the Rust commands
   markdown.ts        markdown-it + highlight.js + DOMPurify
-  styles.css         light/dark theme
+  theme.ts           Light / Dark / Follow system
+  securitypage.ts    the Security check section
+  ornaments.ts       decorative SVGs (starbursts, dots, checker strip)
+  styles.css         theme tokens and layout (design/UI-SPEC.md)
 src-tauri/src/
   main.rs            Tauri commands, streaming over an IPC channel, cancellation
   llm.rs             OpenAI-compatible client, SSE parsing, friendly errors
   think.rs           <think> tag splitter for inline reasoning
   server.rs          detect / start / stop the model server
   db.rs              SQLite schema and queries
+  security.rs        Security check commands (secrules.rs: the pure, unit-tested rules)
 scripts/e2e.mjs      end-to-end tests over the DevTools protocol
-app-icon.svg         source for the generated icons (npx tauri icon app-icon.svg)
+design/              UI design handoff; icons come from design/assets/democritus-icon-1024.png
+                     (npx tauri icon design/assets/democritus-icon-1024.png)
 ```

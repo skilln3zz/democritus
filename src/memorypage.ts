@@ -40,7 +40,6 @@ async function refresh() {
   $('#mem-count').textContent = `${o.files.length} file${o.files.length === 1 ? '' : 's'} · ${formatBytes(bytes)}`;
   $<HTMLInputElement>('#mem-pause').checked = o.paused;
   $<HTMLInputElement>('#mem-auto').checked = o.autoApply;
-  $<HTMLInputElement>('#mem-auto').disabled = o.lockdown;
   const bits = [];
   if (o.lockdown) bits.push('Lockdown: automatic memory writing paused');
   else if (o.paused) bits.push('Memory paused');

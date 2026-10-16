@@ -830,7 +830,7 @@ async function testContinuity(cdp) {
   const r = await awaitReply(cdp, 900_000);
   report('continuity: new brain knows what was said to the old one', r.snap.content.includes(CODE_WORD), `"${r.snap.content.slice(0, 120)}"`);
   const divider = await cdp.eval(`document.querySelector('.brain-switch')?.innerText ?? ''`);
-  report('continuity: "Brain switched" divider with handoff note', divider.includes(`Brain switched to ${medium}`) && /Handed over/.test(divider), divider.replace(/\s+/g, ' '));
+  report('continuity: "Brain switched" divider with handoff note', divider.toLowerCase().includes(`brain switched to ${medium}`) && /Handed over/i.test(divider), divider.replace(/\s+/g, ' '));
   const convId = await activeConversationId(cdp);
   const saved = (await savedMessages(cdp, convId)).filter((m) => m.role === 'assistant');
   const ctx = saved[saved.length - 1]?.stats?.context;

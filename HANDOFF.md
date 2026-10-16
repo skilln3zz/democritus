@@ -1,6 +1,6 @@
 # Democritus: handoff
 
-Status as of 2026-10-16 (updated by the cloud session on branch `cloud-work`). Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
+Status as of 2026-10-16 (updated by the cloud session on branch `cloud-work`, UI redesign added the same day). Project: `D:\democritus-app` (Tauri 2 + Rust backend + TypeScript UI, Ollama as the model server).
 
 The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do not delete it until the operator says so.**
 
@@ -14,6 +14,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
 | 2 | Home folder and memory | **Code complete** (commit `24704c0`); Windows end-to-end run (`--only=mem`) still to confirm, see "Test on Windows" |
 | 3 | Continuity across model switches | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "Test on Windows" |
+| UI | "Bohemian dusk" redesign, theme switch, Security check (design/UI-SPEC.md) | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "UI redesign" below |
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
 | 6C | Memory cleanup proposals | Not started |
@@ -140,7 +141,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
   - 6D builds the dataset side and the Train page.
   - 6E adds the training and reuses them.
 - **Icon:** use `democritus-split-1024.png` from the project folder with `npx tauri icon`. Do not design an atom icon.
-- **Out of scope for this session:** do **not** restyle the app, and do **not** build a firewall rule or a security-check panel. Another session will do the visual redesign and the security work. Build new screens from the existing components and styling, and keep layout and logic separate.
+- **Redesign and security panel:** these were out of scope for the Step 1–7 session and have now been done by the redesign session (see "UI redesign" below). New screens for 6A–6E should use the new components and tokens in `src/styles.css`, and keep layout and logic separate.
 - **Defaults:** permissions all off. Memory updates default to "ask me first".
 
 ## Known issues
@@ -209,4 +210,53 @@ Run these on the Windows PC after pulling `cloud-work`:
 7. By hand:
    - Open Settings and check the Context window field.
    - In Task Manager, compare the VRAM of `qwen3.5:9b` and `qwen3.8:27b` with the earlier numbers. The window used to be Ollama's default; it is now 8192.
-   - Check that the top bar's Project dropdown doesn't overlap the "loaded models" pill at your window size (in a 1200 px mock it looked tight).
+   - (The old "loaded models" pill is gone: loaded models now live in the Continuity panel, see "UI redesign".)
+
+## UI redesign (cloud session, branch `cloud-work`)
+
+Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safety rules and features are unchanged; the only new behavior is the theme setting and the Security check. Written and type-checked on Linux. It was also rendered in headless Chromium against a fake backend (screenshots looked like the mockups in both themes and at 1024×700), but **not** run in WebView2 or against real models.
+
+### What changed
+
+- **Look:** theme tokens on `:root`, switched by `data-theme` on `<html>`; the dusk photo behind everything; chamfered paper panels; Italiana / Manrope / IBM Plex Mono bundled from `@fontsource/*` 5.3.0 (the three approved packages, nothing loads from the web).
+- **Chat:** top band (icon and labels, the conversation's N° and title, DEMOCRITUS wordmark, the Brain picker, Project picker, server status and tok/s); a left panel with conversations grouped by project with 3-digit numbers, then Memory, Settings & safety, Activity log and Lockdown; messages over the photo; the composer band with a new attach button (opens a file picker; same checks as drag and drop); a right **Continuity** panel (current state and next step, project steps, models in memory with a GPU/RAM bar and Unload, files recalled by the last reply).
+- **Memory:** band with Auto-apply and Pause memory; file index; the file as a page; proposed updates with Apply / Reject; recent memory events from the activity log; Reset.
+- **Settings & safety** (the old Operator page): the Lockdown band (inverts when locked), Appearance, numbered permissions with round switches, allowlist chips and editor, downloads, the **Security check**, a short activity log and Reset. The settings dialog opens from the gear in the top band or "Chat & model settings…".
+- **Theme:** Light / Dark / Follow system, stored as `theme` in the app settings (default `system`). `public/theme-boot.js` applies it before the first paint from a localStorage copy; the saved setting wins on start. Follow system tracks Windows live.
+- **Security check** (`src-tauri/src/security.rs`, pure rules in `secrules.rs`, UI in `src/securitypage.ts`). Six rows, green / red / grey:
+  1. Ollama's port (from the server URL) is bound only to loopback: `netstat -an`, recognizing listening sockets by their foreign address so it works in any Windows language.
+  2. `OLLAMA_HOST` for the user (`HKCU\Environment`), the computer (`HKLM\…\Session Manager\Environment`) and the app's own environment. Fix: set it to `127.0.0.1:<port>` with `[Environment]::SetEnvironmentVariable` (admin only for the computer-wide value), then restart Ollama.
+  3. Windows Firewall: an enabled outbound Block rule for `democritus.exe`, `ollama.exe` and `ollama app.exe` (the tray app, which does Ollama's update checks). Fix: **Create rules** shows the exact `New-NetFirewallRule` commands, then runs them in an elevated PowerShell (UAC prompt) only after "Run commands". Rules go in the group "Democritus" and block every address except 127.0.0.1 and ::1, so local chat keeps working.
+  4. Ollama version from `/api/version`, with a note to update it yourself. No update checks.
+  5. Lockdown and download permission (fix: Turn on Lockdown).
+  6. Model files: `<home>\downloads` must hold only `.gguf` / `.safetensors` whose first bytes match; Ollama's blobs (`OLLAMA_MODELS` or `%USERPROFILE%\.ollama\models\blobs`) must not be executables, zips or pickles. Nothing is ever deleted.
+  The window only sends a fix id; the backend rebuilds the commands itself. Every check run and every fix (with its commands and result) is in the activity log under "security".
+- **Icons:** regenerated with `npx tauri icon design/assets/democritus-icon-1024.png` (same picture as before); the old purple placeholder `app-icon.png.svg` is removed.
+- **Window minimum** is now 1024×700. Below 820 px of height the frame and bands get tighter (14 px instead of 22 px padding) so the conversation list keeps room.
+- `scripts/e2e.mjs`: the brain-switch check is now case-insensitive (the divider is in caps). All other selectors the tests use were kept (`#model-select`, `#loaded-btn` / `#loaded-panel`, `.rail-btn[data-page=…]`, `#lockdown-btn`, `#op-toggles input.switch`, …). `#loaded-btn` is now the refresh button of the always-visible "In memory" list.
+
+### Decisions for the operator
+
+- **The Democritus firewall rule also blocks approved downloads** (they come from `democritus.exe`). The dialog says so. If you want both, switch the rule off in Windows Defender Firewall (group "Democritus") while downloading, or tell me to build an exception.
+- Firewall rules are tied to a program path. A rule created from a dev run covers `src-tauri\target\debug\democritus.exe`, not the installed app; run "Create rules" again from the installed app.
+- `msedgewebview2.exe` (the WebView2 connection in Known issues) is **not** covered: a rule for it would cut every WebView2 app on the PC.
+- Left out on purpose because the features don't exist yet: the Performance link (Step 6A), thumbs up/down and edit on replies (6B), "Edit first" on memory proposals. The mockups show them; they'll slot into the same places.
+- The thinking text uses the body font, not Italiana, because long reasoning in a display face is hard to read.
+- The window's title bar still follows Windows' own theme (changing it needs an extra Tauri window permission).
+
+### Test on Windows (redesign)
+
+1. `git pull`, then `npm ci` (adds the three `@fontsource` packages from the lockfile), then `npm run build`.
+2. `cd src-tauri; cargo test --offline` — includes the new `secrules` tests (they also passed on Linux) and compiles the Windows-only code in `security.rs`, which the cloud could not compile.
+3. `scripts\dev-e2e.ps1 -Fresh`, then `node scripts/e2e.mjs --only=ui,safety` and `--only=memory,continuity` — the selectors changed with the layout.
+4. Look at every page in Light, Dark and Follow system. While on Follow system, switch Windows between light and dark: the app should follow at once. Restart: no flash of the other theme.
+5. Resize to 1024×700: nothing overlaps, the Brain/Project pickers and the conversation list stay usable; dropdowns open over the band, not clipped.
+6. Keyboard only: Tab through each page; focus rings are visible (accent), the theme switch moves with the arrow keys, Esc still stops a reply.
+7. Settings & safety → Security check. It runs once per session when you open the page:
+   - Row 1 green with Ollama on 127.0.0.1. Then set a user variable `OLLAMA_HOST=0.0.0.0`, restart Ollama, "Check again": rows 1 and 2 red. Press the row-2 fix, check the dialog shows the exact command, run it, restart Ollama: both green.
+   - Row 3: "Create rules" → the dialog lists one command per program → "Run commands" → UAC prompt. Decline once (expect "Cancelled at the Windows administrator prompt", or a generic error on a non-English Windows), then accept. The rules should appear in `wf.msc` under group "Democritus". "Check again" → green. Then confirm chat still works and `ollama pull` fails. To remove the rules: `Remove-NetFirewallRule -Group 'Democritus'` in an admin PowerShell.
+   - How long the check takes (the firewall query is PowerShell; tell me if it's over ~5 s).
+   - Row 6 with your real model store, and with a fake `test.bin` in `D:\Democritus\downloads` (should turn red, and nothing gets deleted).
+   - The Log page shows "security check", "security fix confirmed" and "security fix done/failed".
+8. Attach button in the composer: pick a text file and a binary file (the binary should be refused, as with drag and drop).
+
