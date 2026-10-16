@@ -563,6 +563,64 @@ async function testSafety(cdp, fast) {
   await cdp.eval(`document.querySelector('.rail-btn[data-page=chat]').click()`);
 }
 
+// A real, operator-approved download through the UI (both approval dialogs).
+async function testDownload(cdp, url) {
+  const activity = (kind) => cdp.eval(invoke('read_activity', { limit: 300, kind, query: null }));
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=operator]').click()`);
+  await waitFor(cdp, `document.querySelector('#op-toggles input[data-key=allowDownloads]')`, 5000, 'operator page');
+  if (!(await cdp.eval(`${invoke('get_operator')}.then(o => o.allowDownloads)`))) {
+    await cdp.eval(`document.querySelector('#op-toggles input[data-key=allowDownloads]').click()`);
+    await waitFor(cdp, `${invoke('get_operator')}.then(o => o.allowDownloads)`, 5000, 'downloads allowed');
+  }
+  await cdp.eval(`(() => { const i = document.querySelector('#op-download-url'); i.value = ${JSON.stringify(url)}; document.querySelector('#op-download-btn').click(); })()`);
+
+  const lookup = await waitFor(cdp, `document.querySelector('#approval-dialog').open && document.querySelector('#approval-what').textContent + ' | ' + document.querySelector('#approval-details').innerText`, 5000, 'lookup approval');
+  report('download: first dialog asks to look up size and checksum', /ONE request/.test(lookup) && lookup.includes(url), lookup.replace(/\s+/g, ' '));
+  await cdp.eval(`document.querySelector('#approval-dialog button[value=approve]').click()`);
+
+  const dl = await waitFor(
+    cdp,
+    `document.querySelector('#approval-dialog').open && /download this file/.test(document.querySelector('#approval-what').textContent) && document.querySelector('#approval-details').innerText`,
+    60_000,
+    'download approval',
+  );
+  await screenshot(cdp, 'download-approval');
+  report('download: second dialog shows size, published SHA-256 and serving host', /Size/.test(dl) && /[0-9a-f]{64}/.test(dl), dl.replace(/\s+/g, ' '));
+  await cdp.eval(`document.querySelector('#approval-dialog button[value=approve]').click()`);
+
+  const t0 = Date.now();
+  let lastProgress = '';
+  const progressSeen = new Set();
+  for (;;) {
+    const s = await cdp.eval(`({ cls: document.querySelector('#op-download-status').className, text: document.querySelector('#op-download-status').innerText })`);
+    if (/Downloading/.test(s.text) && s.text !== lastProgress) {
+      lastProgress = s.text;
+      progressSeen.add(s.text);
+    }
+    if (s.cls.includes('ok-box') || s.cls.includes('form-error')) {
+      await screenshot(cdp, 'download-done');
+      const secs = (Date.now() - t0) / 1000;
+      report('download: file downloaded and checksum verified', s.cls.includes('ok-box') && /Checksum matches/.test(s.text), `${s.text.replace(/\s+/g, ' ')} (${secs.toFixed(0)} s, ${progressSeen.size} progress updates)`);
+      break;
+    }
+    if (Date.now() - t0 > 3_600_000) throw new Error('download took over an hour');
+    await sleep(1000);
+  }
+
+  const approvals = (await activity('approval')).filter((e) => e.action === 'approved');
+  const requests = (await activity('network')).filter((e) => e.action === 'internet request').map((e) => `${e.detail.method} ${new URL(e.detail.url).host} ${e.detail.status}`);
+  const finished = (await activity('download')).find((e) => e.action === 'finished');
+  report(
+    'download: approvals, every internet request and the result are in the activity log',
+    approvals.length >= 2 && requests.length >= 2 && finished?.detail.checksumMatches === true,
+    `approvals=${approvals.length}; requests: ${requests.join(', ')}; sha256=${finished?.detail.sha256}`,
+  );
+
+  // Back to the default: downloads off.
+  await cdp.eval(`document.querySelector('#op-toggles input[data-key=allowDownloads]').click()`);
+  await waitFor(cdp, `${invoke('get_operator')}.then(o => !o.allowDownloads)`, 5000, 'downloads off again');
+}
+
 async function testMigration(cdp) {
   const convs = await cdp.eval(invoke('list_conversations', { query: null }));
   const legacy = convs.find((c) => c.title === 'Legacy chat about tomatoes');
@@ -617,6 +675,7 @@ try {
   if (ONLY.has('identity')) await testIdentity(cdp, models).catch((e) => report('identity', false, e.message));
   if (ONLY.has('memory')) await testModelMemory(cdp).catch((e) => report('memory', false, e.message));
   if (ONLY.has('safety')) await testSafety(cdp, fast).catch((e) => report('safety', false, e.message));
+  if (ONLY.has('download')) await testDownload(cdp, args.url).catch((e) => report('download', false, e.message));
   if (ONLY.has('persisted')) await testPersisted(cdp);
   if (ONLY.has('chat')) {
     for (const m of models) {

@@ -173,3 +173,102 @@ pub async fn download(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Offline tests against a throwaway HTTP server on 127.0.0.1.
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    /// Serves `body` once, in 64 KiB chunks with a small pause between them.
+    fn serve_once(body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            for chunk in body.chunks(64 * 1024) {
+                if s.write_all(chunk).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        format!("http://127.0.0.1:{port}/model.gguf")
+    }
+
+    fn gguf(len: usize) -> Vec<u8> {
+        let mut v = b"GGUF\x03\x00\x00\x00".to_vec();
+        v.extend((0..len).map(|i| (i % 251) as u8));
+        v
+    }
+
+    fn sha_hex(data: &[u8]) -> String {
+        Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn approval(url: String, size: usize, sha: Option<String>) -> Approval {
+        Approval { id: "t".into(), kind: "download".into(), url, file_name: "model.gguf".into(), size_bytes: Some(size as u64), sha256: sha, served_from: None, created_ms: 0 }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("democritus-dl-{name}-{}", crate::db::now_ms()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[tokio::test]
+    async fn verifies_checksum_and_keeps_file() {
+        let body = gguf(300_000);
+        let dir = temp_dir("ok");
+        let a = approval(serve_once(body.clone()), body.len(), Some(sha_hex(&body)));
+        let r = download(&client(), &a, &dir, &Notify::new(), &AtomicBool::new(false), |_, _| {}, |_, _, _| {}).await.unwrap();
+        assert_eq!(r.checksum_matches, Some(true));
+        assert_eq!(std::fs::read(dir.join("model.gguf")).unwrap(), body);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn checksum_mismatch_discards_the_file() {
+        let body = gguf(200_000);
+        let dir = temp_dir("bad-sha");
+        let a = approval(serve_once(body.clone()), body.len(), Some("0".repeat(64)));
+        let e = download(&client(), &a, &dir, &Notify::new(), &AtomicBool::new(false), |_, _| {}, |_, _, _| {}).await.unwrap_err();
+        assert!(e.contains("Checksum mismatch"), "{e}");
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing left behind");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn executable_disguised_as_gguf_is_refused() {
+        let mut body = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00".to_vec();
+        body.extend(vec![0u8; 100_000]);
+        let dir = temp_dir("exe");
+        let a = approval(serve_once(body.clone()), body.len(), None);
+        let e = download(&client(), &a, &dir, &Notify::new(), &AtomicBool::new(false), |_, _| {}, |_, _, _| {}).await.unwrap_err();
+        assert!(e.contains("executable"), "{e}");
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn lockdown_cancels_a_running_download() {
+        let body = gguf(4_000_000);
+        let dir = temp_dir("lockdown");
+        let a = approval(serve_once(body.clone()), body.len(), None);
+        let stop = AtomicBool::new(false);
+        let e = download(&client(), &a, &dir, &Notify::new(), &stop, |done, _| {
+            if done > 500_000 {
+                stop.store(true, Ordering::SeqCst); // the operator hits Lockdown
+            }
+        }, |_, _, _| {})
+        .await
+        .unwrap_err();
+        assert!(e.contains("Lockdown"), "{e}");
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "partial file removed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
