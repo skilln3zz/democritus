@@ -4,7 +4,9 @@
 mod db;
 mod identity;
 mod llm;
+mod ollama;
 mod server;
+mod sysmem;
 mod think;
 
 use std::collections::HashMap;
@@ -92,6 +94,55 @@ async fn start_server(state: State<'_, AppState>) -> CmdResult<server::ServerSta
     let s = state.settings();
     state.server.ensure_running(&state.http, &s.base_url, &s.server_command).await?;
     Ok(state.server.status(&state.http, &s.base_url).await)
+}
+
+/// Models currently in RAM/VRAM. Also remembers each one's real footprint for
+/// later fit checks. Empty when the server isn't Ollama.
+#[tauri::command]
+async fn loaded_models(state: State<'_, AppState>) -> CmdResult<Vec<ollama::LoadedModel>> {
+    let base = state.settings().base_url;
+    if !ollama::is_ollama(&state.http, &base).await {
+        return Ok(Vec::new());
+    }
+    let loaded = ollama::loaded(&state.http, &base).await?;
+    let conn = state.db();
+    for m in &loaded {
+        let _ = db::record_model_memory(&conn, &m.name, m.size_bytes, m.vram_bytes, m.context_length);
+    }
+    Ok(loaded)
+}
+
+#[tauri::command]
+async fn unload_model(state: State<'_, AppState>, model: String) -> CmdResult<()> {
+    let base = state.settings().base_url;
+    ollama::unload(&state.http, &base, &model).await
+}
+
+#[tauri::command]
+fn memory_info() -> sysmem::MemoryInfo {
+    sysmem::snapshot()
+}
+
+/// Whether `model` fits in free RAM+VRAM, and whether unloading the other
+/// loaded models would make room. None when the server isn't Ollama.
+#[tauri::command]
+async fn model_fit(state: State<'_, AppState>, model: String) -> CmdResult<Option<ollama::FitReport>> {
+    let base = state.settings().base_url;
+    if !ollama::is_ollama(&state.http, &base).await {
+        return Ok(None);
+    }
+    let loaded = ollama::loaded(&state.http, &base).await?;
+    let measured = db::model_memory(&state.db(), &model).map_err(err)?;
+    let (needed, is_estimate) = match measured {
+        Some(bytes) => (bytes, false),
+        None => {
+            let models = llm::list_models(&state.http, &base).await?;
+            let file = models.iter().find(|m| m.id == model).and_then(|m| m.size_bytes).unwrap_or(0);
+            (ollama::estimate_needed(file), true)
+        }
+    };
+    let memory = tauri::async_runtime::spawn_blocking(sysmem::snapshot).await.map_err(err)?;
+    Ok(Some(ollama::evaluate(&model, needed, is_estimate, memory, &loaded)))
 }
 
 #[tauri::command]
@@ -363,6 +414,10 @@ fn main() {
             list_models,
             server_status,
             start_server,
+            loaded_models,
+            unload_model,
+            memory_info,
+            model_fit,
             list_conversations,
             create_conversation,
             rename_conversation,

@@ -147,7 +147,13 @@ async function selectModel(cdp, model) {
   if (!ok) throw new Error(`Model ${model} is not in the picker`);
 }
 
+// Id of the newest assistant message before the last send; replies must be newer.
+let lastIdBeforeSend = 0;
+
 async function typeAndSend(cdp, text) {
+  lastIdBeforeSend = await cdp.eval(
+    `Math.max(0, ...[...document.querySelectorAll('#messages .message.assistant')].map(m => Number(m.dataset.id) || 0))`,
+  );
   await cdp.eval(`document.querySelector('#input').focus()`);
   await cdp.send('Input.insertText', { text });
   await cdp.key('Enter', 'Enter', 13, 0, '\r');
@@ -160,7 +166,7 @@ async function awaitReply(cdp, timeoutMs, onSample) {
   let firstTokenAt = null;
   for (;;) {
     const snap = await cdp.eval(SNAP);
-    if (snap && snap.id > 0) {
+    if (snap && snap.id > lastIdBeforeSend) {
       const len = snap.content.length + snap.reasoningLen;
       if (snap.status === 'streaming' && len > 0) {
         lengths.add(len);
@@ -380,6 +386,69 @@ async function testIdentity(cdp, models) {
   }
 }
 
+async function testModelMemory(cdp) {
+  const loadedNames = async () => (await cdp.eval(invoke('loaded_models'))).map((m) => m.name);
+  const small = 'qwen3.5:4b';
+  const medium = 'qwen3.5:9b';
+
+  await newChat(cdp);
+  await selectModel(cdp, small);
+  await typeAndSend(cdp, 'Reply with just the word OK.');
+  await awaitReply(cdp, 300_000);
+  report('memory: loaded model listed', (await loadedNames()).includes(small), (await loadedNames()).join(', '));
+
+  await cdp.eval(`document.querySelector('#loaded-btn').click()`);
+  const row = await waitFor(cdp, `document.querySelector('#loaded-panel .loaded-name')?.textContent`, 5000, 'loaded panel row');
+  const foot = await cdp.eval(`document.querySelector('#loaded-panel .popover-foot')?.textContent ?? ''`);
+  report('memory: panel shows model and free RAM/VRAM', row === small && /RAM .* free/.test(foot) && /VRAM/.test(foot), `${row} | ${foot}`);
+  await screenshot(cdp, 'loaded-panel');
+  await cdp.eval(`document.body.click()`);
+
+  // Switching brains unloads the previous one.
+  await selectModel(cdp, medium);
+  const t0 = Date.now();
+  await waitFor(cdp, `${invoke('loaded_models')}.then(l => !l.some(m => m.name === ${JSON.stringify(small)}))`, 20_000, `${small} to unload`);
+  report('memory: switching unloads the previous model', true, `${small} unloaded ${Date.now() - t0} ms after switching to ${medium}`);
+  await typeAndSend(cdp, 'Reply with just the word OK.');
+  await awaitReply(cdp, 300_000);
+  const afterSwitch = await loadedNames();
+  report('memory: only the new brain is loaded', afterSwitch.length === 1 && afterSwitch[0] === medium, afterSwitch.join(', '));
+
+  // Another program loads the 27B; then ask for qwen3-coder, which can't fit beside it.
+  const big = 'qwen3.8:27b';
+  const coder = 'qwen3-coder:latest';
+  await fetch('http://127.0.0.1:11434/api/generate', {
+    method: 'POST',
+    body: JSON.stringify({ model: big, prompt: '', keep_alive: '10m' }),
+    signal: AbortSignal.timeout(300_000),
+  });
+  await waitFor(cdp, `${invoke('loaded_models')}.then(l => l.some(m => m.name === ${JSON.stringify(big)}))`, 60_000, `${big} loaded externally`);
+  await newChat(cdp);
+  await selectModel(cdp, coder); // also unloads the 9B
+  await sleep(3000);
+  await typeAndSend(cdp, 'Reply with just the word OK.');
+  const prompt = await waitFor(cdp, `document.querySelector('#confirm-dialog').open && document.querySelector('#confirm-text').textContent`, 30_000, 'fit dialog');
+  await screenshot(cdp, 'fit-dialog');
+  report('memory: warns before loading a model that will not fit', prompt.includes(big) && /Unload/.test(prompt), prompt);
+  await cdp.eval(`document.querySelector('#confirm-dialog button[value=unload]').click()`);
+  const r = await awaitReply(cdp, 600_000);
+  const finalLoaded = await loadedNames();
+  report(
+    'memory: unload-and-continue loads the big model cleanly',
+    r.snap.status === 'complete' && finalLoaded.includes(coder) && !finalLoaded.includes(big),
+    `status=${r.snap.status}${r.snap.error ? ` error=${r.snap.error}` : ''}, loaded: ${finalLoaded.join(', ')}`,
+  );
+
+  // Unload button in the panel.
+  await cdp.eval(`document.querySelector('#loaded-btn').click()`);
+  await waitFor(cdp, `document.querySelector('#loaded-panel .unload-btn')`, 5000, 'unload button');
+  await sleep(500); // as a person would: look, then click
+  await cdp.eval(`document.querySelector('#loaded-panel .unload-btn').click()`);
+  await waitFor(cdp, `${invoke('loaded_models')}.then(l => l.length === 0)`, 30_000, 'everything unloaded');
+  report('memory: Unload button frees the model', true, 'no models loaded');
+  await cdp.eval(`document.body.click()`);
+}
+
 async function testMigration(cdp) {
   const convs = await cdp.eval(invoke('list_conversations', { query: null }));
   const legacy = convs.find((c) => c.title === 'Legacy chat about tomatoes');
@@ -432,6 +501,7 @@ try {
 
   if (ONLY.has('migration')) await testMigration(cdp).catch((e) => report('migration', false, e.message));
   if (ONLY.has('identity')) await testIdentity(cdp, models).catch((e) => report('identity', false, e.message));
+  if (ONLY.has('memory')) await testModelMemory(cdp).catch((e) => report('memory', false, e.message));
   if (ONLY.has('persisted')) await testPersisted(cdp);
   if (ONLY.has('chat')) {
     for (const m of models) {

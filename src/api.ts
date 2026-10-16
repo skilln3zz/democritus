@@ -62,6 +62,34 @@ export type StreamEvent =
   | { type: 'reclassify' }
   | { type: 'done'; message: Message };
 
+export interface LoadedModel {
+  name: string;
+  sizeBytes: number;
+  vramBytes: number;
+  contextLength: number | null;
+  expiresAt: string | null;
+}
+
+export interface MemoryInfo {
+  totalRam: number;
+  freeRam: number;
+  gpuName: string | null;
+  totalVram: number | null;
+  freeVram: number | null;
+}
+
+export interface FitReport {
+  model: string;
+  alreadyLoaded: boolean;
+  neededBytes: number;
+  neededIsEstimate: boolean;
+  freeBytes: number;
+  others: LoadedModel[];
+  fitsNow: boolean;
+  fitsAfterUnloadingOthers: boolean;
+  memory: MemoryInfo;
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -75,6 +103,10 @@ export const api = {
   listModels: () => invoke<ModelInfo[]>('list_models'),
   serverStatus: () => invoke<ServerStatus>('server_status'),
   startServer: () => invoke<ServerStatus>('start_server'),
+  loadedModels: () => invoke<LoadedModel[]>('loaded_models'),
+  unloadModel: (model: string) => invoke<void>('unload_model', { model }),
+  memoryInfo: () => invoke<MemoryInfo>('memory_info'),
+  modelFit: (model: string) => invoke<FitReport | null>('model_fit', { model }),
   listConversations: (query: string) => invoke<Conversation[]>('list_conversations', { query: query || null }),
   createConversation: (title: string, model: string) => invoke<Conversation>('create_conversation', { title, model }),
   renameConversation: (id: number, title: string) => invoke<void>('rename_conversation', { id, title }),

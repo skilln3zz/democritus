@@ -26,6 +26,10 @@
             <select id="model-select"></select>
             <button id="refresh-models" class="icon-btn" type="button" title="Refresh model list"></button>
           </div>
+          <div class="loaded-wrap">
+            <button id="loaded-btn" class="pill" type="button" title="Models currently in memory" hidden></button>
+            <div id="loaded-panel" class="popover" hidden></div>
+          </div>
           <div class="spacer"></div>
           <button id="server-status" class="status-pill" type="button" data-state="checking">
             <span class="dot"></span><span class="label">Checking server…</span>
@@ -98,10 +102,7 @@
     <dialog id="confirm-dialog">
       <form method="dialog">
         <p id="confirm-text"></p>
-        <div class="dialog-actions">
-          <button class="btn" value="cancel" type="submit">Cancel</button>
-          <button class="btn danger" value="ok" type="submit">Delete</button>
-        </div>
+        <div class="dialog-actions" id="confirm-actions"></div>
       </form>
     </dialog>
 

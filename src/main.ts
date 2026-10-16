@@ -1,5 +1,14 @@
 import './styles.css';
-import { api, type Conversation, type Message, type ModelInfo, type ServerStatus, type Settings, type StreamEvent } from './api';
+import {
+  api,
+  type Conversation,
+  type LoadedModel,
+  type Message,
+  type ModelInfo,
+  type ServerStatus,
+  type Settings,
+  type StreamEvent,
+} from './api';
 import { renderMarkdown } from './markdown';
 import { icons, logo } from './icons';
 
@@ -46,6 +55,9 @@ const els = {
   setAutostart: $<HTMLInputElement>('#set-autostart'),
   confirmDialog: $<HTMLDialogElement>('#confirm-dialog'),
   confirmText: $('#confirm-text'),
+  confirmActions: $('#confirm-actions'),
+  loadedBtn: $<HTMLButtonElement>('#loaded-btn'),
+  loadedPanel: $('#loaded-panel'),
   toasts: $('#toasts'),
 };
 
@@ -75,6 +87,9 @@ const state = {
   generation: null as Generation | null,
   server: null as ServerStatus | null,
   query: '',
+  loaded: [] as LoadedModel[],
+  /** The model the operator last chose, used to unload it on a switch. */
+  activeModel: '',
 };
 
 /** The message each rendered element currently shows. */
@@ -103,6 +118,12 @@ function formatBytes(n: number): string {
   return `${n} B`;
 }
 
+/** RAM/VRAM amounts in binary GB, matching Task Manager ("32 GB RAM", "12 GB VRAM"). */
+function formatMem(n: number): string {
+  const gib = n / 1024 ** 3;
+  return gib >= 1 ? `${gib.toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
+}
+
 function relativeTime(ms: number): string {
   const d = new Date(ms);
   const now = new Date();
@@ -120,13 +141,38 @@ function toast(text: string, kind: 'info' | 'error' = 'info', ms = 4500) {
   setTimeout(() => t.remove(), ms + 300);
 }
 
-function askConfirm(text: string): Promise<boolean> {
+interface Choice {
+  value: string;
+  label: string;
+  kind?: 'primary' | 'danger';
+}
+
+/** Modal with custom buttons; resolves to the chosen value ('cancel' on Esc). */
+function choose(text: string, choices: Choice[]): Promise<string> {
   els.confirmText.textContent = text;
+  els.confirmActions.replaceChildren(
+    ...choices.map((c) => {
+      const b = document.createElement('button');
+      b.type = 'submit';
+      b.value = c.value;
+      b.className = `btn ${c.kind ?? ''}`;
+      b.textContent = c.label;
+      return b;
+    }),
+  );
   els.confirmDialog.returnValue = '';
   els.confirmDialog.showModal();
   return new Promise((resolve) =>
-    els.confirmDialog.addEventListener('close', () => resolve(els.confirmDialog.returnValue === 'ok'), { once: true }),
+    els.confirmDialog.addEventListener('close', () => resolve(els.confirmDialog.returnValue || 'cancel'), { once: true }),
   );
+}
+
+async function askConfirm(text: string, action = 'Delete'): Promise<boolean> {
+  const c = await choose(text, [
+    { value: 'cancel', label: 'Cancel' },
+    { value: 'ok', label: action, kind: 'danger' },
+  ]);
+  return c === 'ok';
 }
 
 function nearBottom(): boolean {
@@ -193,6 +239,113 @@ function applyStatus(s: ServerStatus) {
       : `No model server is answering at ${s.baseUrl}.`;
   }
   if (s.state === 'connected' && previous !== 'connected') void loadModels();
+  if (s.state === 'connected') void refreshLoaded();
+  else {
+    state.loaded = [];
+    renderLoaded();
+  }
+}
+
+// ---------- loaded models (RAM/VRAM) ----------
+
+async function refreshLoaded() {
+  try {
+    state.loaded = await api.loadedModels();
+  } catch {
+    state.loaded = [];
+  }
+  renderLoaded();
+}
+
+function renderLoaded() {
+  const n = state.loaded.length;
+  els.loadedBtn.hidden = state.server?.state !== 'connected';
+  const label = n === 0 ? 'No model loaded' : n === 1 ? state.loaded[0].name : `${n} models loaded`;
+  els.loadedBtn.innerHTML = `${icons.chip}<span>${escapeText(label)}</span>`;
+  els.loadedBtn.dataset.count = String(n);
+  if (!els.loadedPanel.hidden) void renderLoadedPanel();
+}
+
+function escapeText(s: string): string {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function renderLoadedPanel() {
+  const rows = state.loaded.map((m) => {
+    const gpu = m.sizeBytes ? Math.round((m.vramBytes / m.sizeBytes) * 100) : 0;
+    const where = gpu >= 100 ? '100% GPU' : gpu === 0 ? 'CPU only' : `${gpu}% GPU / ${100 - gpu}% CPU`;
+    return (
+      `<div class="loaded-row"><div><div class="loaded-name">${escapeText(m.name)}</div>` +
+      `<div class="muted small">${formatMem(m.sizeBytes)} · ${where}${m.contextLength ? ` · ${m.contextLength.toLocaleString()} ctx` : ''}</div></div>` +
+      `<button type="button" class="btn small unload-btn" data-model="${escapeText(m.name)}">Unload</button></div>`
+    );
+  });
+  let mem = '';
+  try {
+    const info = await api.memoryInfo();
+    mem =
+      `RAM ${formatMem(info.freeRam)} free of ${formatMem(info.totalRam)}` +
+      (info.totalVram != null ? ` · VRAM ${formatMem(info.freeVram ?? 0)} free of ${formatMem(info.totalVram)}` : '');
+  } catch {
+    // memory figures are optional
+  }
+  els.loadedPanel.innerHTML =
+    `<div class="popover-title">Models in memory</div>` +
+    (rows.length ? rows.join('') : '<div class="muted small">None. A model loads when you send a message.</div>') +
+    (mem ? `<div class="popover-foot muted small">${mem}</div>` : '');
+}
+
+async function unloadModel(model: string, quiet = false) {
+  try {
+    await api.unloadModel(model);
+    if (!quiet) toast(`Unloaded ${model}`);
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
+  await refreshLoaded();
+}
+
+/**
+ * Checks free RAM/VRAM before a model loads. If it won't fit, offers to unload
+ * the other loaded models first. Returns false if the operator cancels.
+ */
+async function ensureModelFits(model: string): Promise<boolean> {
+  let fit;
+  try {
+    fit = await api.modelFit(model);
+  } catch {
+    return true; // can't tell; let the server decide
+  }
+  if (!fit || fit.fitsNow) return true;
+  const need = `${formatMem(fit.neededBytes)}${fit.neededIsEstimate ? ' (estimated)' : ''}`;
+  const free = formatMem(fit.freeBytes);
+  if (fit.fitsAfterUnloadingOthers && fit.others.length) {
+    const names = fit.others.map((o) => `${o.name} (${formatMem(o.sizeBytes)})`).join(', ');
+    const c = await choose(
+      `${model} needs about ${need} of memory, but only ${free} is free right now. Unload ${names} first?`,
+      [
+        { value: 'cancel', label: 'Cancel' },
+        { value: 'anyway', label: 'Load anyway' },
+        { value: 'unload', label: 'Unload and continue', kind: 'primary' },
+      ],
+    );
+    if (c === 'unload') {
+      for (const o of fit.others) await unloadModel(o.name, true);
+      toast(`Unloaded ${fit.others.map((o) => o.name).join(', ')}`);
+      return true;
+    }
+    return c === 'anyway';
+  }
+  const c = await choose(
+    `${model} needs about ${need} of memory, but only ${free} is free${fit.others.length ? ', even after unloading the other models' : ''}. It will probably fail to load.`,
+    [
+      { value: 'cancel', label: 'Cancel' },
+      { value: 'anyway', label: 'Try anyway', kind: 'danger' },
+    ],
+  );
+  return c === 'anyway';
 }
 
 async function startServer() {
@@ -244,6 +397,7 @@ function selectModel(id?: string | null) {
   if (has(id)) els.modelSelect.value = id!;
   else if (has(fallback)) els.modelSelect.value = fallback!;
   else if (state.models.length) els.modelSelect.value = state.models[0].id;
+  state.activeModel = els.modelSelect.value;
 }
 
 // ---------- sidebar ----------
@@ -497,6 +651,8 @@ function setGenerating(on: boolean) {
   els.send.hidden = on;
   els.stop.hidden = !on;
   els.stop.disabled = false;
+  // Switching brains mid-reply would unload the model that is answering.
+  els.modelSelect.disabled = on || state.models.length === 0;
   document.body.classList.toggle('generating', on);
 }
 
@@ -513,6 +669,7 @@ async function send() {
     toast('No model selected. Is the model server running?', 'error');
     return;
   }
+  if (!(await ensureModelFits(model))) return;
 
   let conversationId = state.currentId;
   if (conversationId === null) {
@@ -582,6 +739,7 @@ async function send() {
     setGenerating(false);
     if (stale && state.currentId === conversationId) await openConversation(conversationId);
     await refreshConversations();
+    void refreshLoaded();
   }
 }
 
@@ -776,6 +934,24 @@ els.status.addEventListener('click', () => {
   else void pollStatus();
 });
 
+els.loadedBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  els.loadedPanel.hidden = !els.loadedPanel.hidden;
+  if (!els.loadedPanel.hidden) {
+    els.loadedPanel.innerHTML = '<div class="muted small">Checking…</div>';
+    void refreshLoaded(); // renders the panel once with fresh data
+  }
+});
+els.loadedPanel.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.unload-btn');
+  if (btn?.dataset.model) {
+    btn.disabled = true;
+    void unloadModel(btn.dataset.model);
+  }
+});
+document.addEventListener('click', () => (els.loadedPanel.hidden = true));
+
 els.input.addEventListener('input', autoGrow);
 els.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -786,6 +962,16 @@ els.input.addEventListener('keydown', (e) => {
 
 els.modelSelect.addEventListener('change', async () => {
   const model = els.modelSelect.value;
+  const previous = state.activeModel;
+  state.activeModel = model;
+  // Free the previous brain's RAM/VRAM right away instead of waiting for the server's idle timeout.
+  if (previous && previous !== model) {
+    void refreshLoaded().then(async () => {
+      if (!state.loaded.some((l) => l.name === previous)) return;
+      await unloadModel(previous, true);
+      toast(`Switched to ${model}; unloaded ${previous} to free memory`);
+    });
+  }
   try {
     if (state.currentId !== null) await api.setConversationModel(state.currentId, model);
     if (state.settings) state.settings = await api.saveSettings({ ...state.settings, defaultModel: model });

@@ -114,7 +114,38 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             -- Measured footprint of each model the last time the server had it loaded.
+             CREATE TABLE model_memory (
+                 model TEXT PRIMARY KEY,
+                 loaded_bytes INTEGER NOT NULL,
+                 vram_bytes INTEGER NOT NULL,
+                 context_length INTEGER,
+                 updated_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )?;
+    }
     Ok(())
+}
+
+pub fn record_model_memory(conn: &Connection, model: &str, loaded_bytes: u64, vram_bytes: u64, context_length: Option<u64>) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO model_memory (model, loaded_bytes, vram_bytes, context_length, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(model) DO UPDATE SET loaded_bytes = excluded.loaded_bytes, vram_bytes = excluded.vram_bytes,
+             context_length = excluded.context_length, updated_at = excluded.updated_at",
+        params![model, loaded_bytes as i64, vram_bytes as i64, context_length.map(|c| c as i64), now_ms()],
+    )?;
+    Ok(())
+}
+
+pub fn model_memory(conn: &Connection, model: &str) -> rusqlite::Result<Option<u64>> {
+    conn.query_row("SELECT loaded_bytes FROM model_memory WHERE model = ?1", params![model], |r| r.get::<_, i64>(0))
+        .optional()
+        .map(|o| o.map(|b| b as u64))
 }
 
 fn conversation_from_row(r: &Row) -> rusqlite::Result<Conversation> {
