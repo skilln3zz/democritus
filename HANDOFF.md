@@ -9,7 +9,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | Step | What | Status |
 |---|---|---|
 | Audit | Compare the existing app against the spec | Done; operator approved the plan |
-| 1 | Identity and rename | **Done** (commit `3868323`), except the icon (see Known issues) |
+| 1 | Identity and rename | **Done** (commit `3868323`); new app icon 2026-10-17 (see Operator decisions) |
 | 4 | Model memory management | **Done** (commit `fc98a8b`) |
 | 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
 | 2 | Home folder and memory | **Verified on Windows** 2026-10-17 after the helper and search fixes: `mem` 20/20 on its own, and again inside the full 4B/9B regression. See "Step 2 fixes, 2026-10-17" |
@@ -193,7 +193,10 @@ Run on the PC (RTX 5070 12 GB, 32 GB RAM, Ollama 0.40.2) against the four real m
 - **Training:** the earlier "skip training, no downloads" answer is **replaced** by the 6E message. Downloads are allowed, but only with approval for each one.
   - 6D builds the dataset side and the Train page.
   - 6E adds the training and reuses them.
-- **Icon:** use `democritus-split-1024.png` from the project folder with `npx tauri icon`. Do not design an atom icon.
+- **Icon (2026-10-17):** `democritus-icon-1024.png` in the project root, a dark spiky sphere on a cream rounded square. It replaces the split face.
+  - `npx tauri icon democritus-icon-1024.png` regenerates `src-tauri/icons`. Delete the `android/` and `ios/` folders it also creates.
+  - The in-app logo (`src/assets/democritus-256.png`, welcome screen and top band) is a copy of `src-tauri/icons/128x128@2x.png`.
+  - `design/assets/` keeps the old split-face files as history. Do not design an atom icon.
 - **Redesign and security panel:** these were out of scope for the Step 1–7 session and have now been done by the redesign session (see "UI redesign" below). New screens for 6A–6E should use the new components and tokens in `src/styles.css`, and keep layout and logic separate.
 - **Defaults:** permissions all off. Memory updates default to "ask me first".
 
@@ -302,7 +305,7 @@ Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safe
   5. Lockdown and download permission (fix: Turn on Lockdown).
   6. Model files: `<home>\downloads` must hold only `.gguf` / `.safetensors` whose first bytes match; Ollama's blobs (`OLLAMA_MODELS` or `%USERPROFILE%\.ollama\models\blobs`) must not be executables, zips or pickles. Nothing is ever deleted.
   The window only sends a fix id; the backend rebuilds the commands itself. Every check run and every fix (with its commands and result) is in the activity log under "security".
-- **Icons:** regenerated with `npx tauri icon design/assets/democritus-icon-1024.png` (same picture as before); the old purple placeholder `app-icon.png.svg` is removed.
+- **Icons:** regenerated with `npx tauri icon design/assets/democritus-icon-1024.png` (same picture as before); the old purple placeholder `app-icon.png.svg` is removed. (Replaced on 2026-10-17 by the new icon; see Operator decisions.)
 - **Window minimum** is now 1024×700. Below 820 px of height the frame and bands get tighter (14 px instead of 22 px padding) so the conversation list keeps room.
 - `scripts/e2e.mjs`: the brain-switch check is now case-insensitive (the divider is in caps). All other selectors the tests use were kept (`#model-select`, `#loaded-btn` / `#loaded-panel`, `.rail-btn[data-page=…]`, `#lockdown-btn`, `#op-toggles input.switch`, …). `#loaded-btn` is now the refresh button of the always-visible "In memory" list.
 
