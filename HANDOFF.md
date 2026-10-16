@@ -178,7 +178,7 @@ node scripts/e2e.mjs --only=identity --models=qwen3.5:4b,qwen3.5:9b
 
 ## Cloud session (branch `cloud-work`)
 
-**This clone has no git remote**, so the commits on `cloud-work` could not be pushed from the cloud machine. Fetch them from this session's container, or add the GitHub remote and push.
+The branch is pushed to GitHub: `https://github.com/skilln3zz/democritus`, branch `cloud-work`, based on `main` at `24704c0`. On the PC: `git fetch origin`, then `git checkout cloud-work`.
 
 Work in this branch was written on a Linux cloud machine. It can't run Ollama, the Qwen models, WebView2 or the Windows build, so everything here is **type-checked and unit-tested only**. Nothing was run against real models.
 
