@@ -56,7 +56,8 @@ pub struct Settings {
     /// Active project (file stem in memory\projects\), '' for none.
     pub active_project: String,
     /// Context window requested from Ollama (num_ctx), capped at each model's
-    /// own limit. Bigger windows hold more history but need more RAM/VRAM.
+    /// own limit. Bigger windows hold more history but need more RAM/VRAM
+    /// (the KV cache grows with it), so the default stays modest.
     pub context_tokens: u32,
 }
 
@@ -74,7 +75,7 @@ impl Default for Settings {
             home_dir: String::new(),
             memory_helper_model: "qwen3.5:4b".into(),
             active_project: String::new(),
-            context_tokens: 16384,
+            context_tokens: 8192,
         }
     }
 }

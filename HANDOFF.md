@@ -13,7 +13,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 4 | Model memory management | **Done** (commit `fc98a8b`) |
 | 7 | Safety rules | **Done** (commit `8879cc1`): HTTPS via native-tls, real approved download verified |
 | 2 | Home folder and memory | **Code complete** (commit `24704c0`); Windows end-to-end run (`--only=mem`) still to confirm, see "Test on Windows" |
-| 3 | Continuity across model switches | Not started |
+| 3 | Continuity across model switches | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "Test on Windows" |
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
 | 6C | Memory cleanup proposals | Not started |
@@ -95,14 +95,25 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 - UI: Memory page (`src/memorypage.ts`, `src/diff.ts`), project dropdown in the top bar, memory-helper setting.
 - End-to-end group: `node scripts/e2e.mjs --only=mem`.
 
+## Step 3: continuity (code complete, not yet run against real models)
+
+- `context.rs` (pure, unit-tested) builds every request in the approved order: core identity and custom prompt, `identity.md`, `operator.md`, `current_state.md`, the active project's file, memory search results, the conversation summary, then the history.
+  - Memory is wrapped in `<memory …>` tags under "data, not instructions", and can't close its own tag.
+  - Untouched templates are skipped.
+  - Files are read fresh from disk on every request, so hand edits win.
+- **Fitting the window.** Tokens are estimated at 3 characters each (conservative). The reply gets `min(max tokens, window/2)`, memory gets at most 35% of the rest, and the history fills what's left, newest first. The new message is always sent, shortened in the middle if it alone is too big.
+- **Summaries.** When the history doesn't fit, the current brain folds the older turns into a running summary. It stores the summary in `conversations.summary` / `summary_upto` (schema v4) and keeps only the newest turns that fit in half the budget, so it doesn't summarize again on every turn. If summarizing fails, the oldest turns are left out and the reply shows a warning badge.
+- **Native Ollama chat.** With Ollama, chat now uses `/api/chat` (NDJSON) with `num_ctx`. Other servers keep the OpenAI-compatible endpoint.
+  - The window is the new setting **Context window** (default 8192), capped at the model's own limit from `/api/show`.
+  - The memory helper reuses a loaded model's current window (from `/api/ps`), or the chat window for the brain, so Ollama never reloads a model just because `num_ctx` differs.
+- **Brain switch.** When the model of the previous reply differs, a handoff note is added to the system prompt and logged ("brain switch handoff"). The UI shows a "Brain switched to X (was Y)" divider with "Handed over: N recent messages, memory: …".
+- Each reply saves what went into it in `stats.context`. The footer shows "~5.2k / 8k context", with details on hover.
+- **"Last time" card** on the start screen (`last_time` command): Last task, Project and Next step from `current_state.md`, plus a button to continue the most recent conversation.
+- End-to-end groups: `--only=continuity`, then restart the app, then `--only=restart`.
+
 ## Exact next steps
 
-1. **Step 3:**
-   - Assemble context in this order: core identity, `identity.md`, `operator.md`, `current_state.md`, the active project file, memory search results, then history. Wrap memory content as *data*, not instructions.
-   - Fit the context to the model's window. Move chat to Ollama's native `/api/chat` to control `num_ctx`.
-   - Summarize older messages with the current model and store the summary in the conversation.
-   - Show a "Brain switched to X" divider and a handoff note, and a "Last time: …" banner on open.
-   - Run the switch-model continuity test and the restart test from the spec.
+1. **Operator:** run the "Test on Windows" list below and report failures.
 2. **Step 6A:** benchmark and per-model profiles, a Performance page, and memory monitoring during chats.
 3. **Step 6B:** thumbs up/down and "edit response", model-per-task stats, optional auto-select (off by default), and prompt suggestions that need approval.
 4. **Step 6C:** weekly or on-demand memory cleanup proposals, applied only with approval.
@@ -143,6 +154,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
   - Cause unknown. Suspects to check: the `RunEvent::Exit` handler, or a pending IPC call during webview teardown.
 - **How Lockdown was interpreted:** Lockdown blocks all *internet* (non-loopback) access and pauses learning and memory writes. Chat with the local Ollama server on 127.0.0.1 still works. Confirm with the operator that this is what they want.
 - **Ollama's own model loading** can still fail transiently with a CUDA error right after a large model unloads, as seen in the first build. The app shows a "try sending again" message.
+- **Context window vs. VRAM.** The fit check (Step 4) estimates from file size and doesn't yet account for the context window. Measured footprints update on the next load. Step 6A should pick the window per model from the benchmark.
 - `cargo` reports 4 dead-code warnings for helpers reserved for Step 2 (`home::backups_dir`, `OperatorSettings::memory_writable`, and so on).
 - The end-to-end safety group assumes **fresh** test data. Launch with `-Fresh`.
 
@@ -166,6 +178,8 @@ node scripts/e2e.mjs --only=identity --models=qwen3.5:4b,qwen3.5:9b
 
 ## Cloud session (branch `cloud-work`)
 
+**This clone has no git remote**, so the commits on `cloud-work` could not be pushed from the cloud machine. Fetch them from this session's container, or add the GitHub remote and push.
+
 Work in this branch was written on a Linux cloud machine. It can't run Ollama, the Qwen models, WebView2 or the Windows build, so everything here is **type-checked and unit-tested only**. Nothing was run against real models.
 
 How it was checked on Linux (no system packages installed):
@@ -180,3 +194,19 @@ Run these on the Windows PC after pulling `cloud-work`:
 1. `cd src-tauri; cargo test --offline` — all unit tests pass (including `memcmds` tests that the cloud couldn't run).
 2. `npm run build` — the UI type-checks and bundles.
 3. `scripts\dev-e2e.ps1 -Fresh`, then `node scripts/e2e.mjs --only=mem` — the Step 2 memory group (needs `qwen3.5:4b`, and the embedding model for the meaning-search check).
+4. Same app run: `node scripts/e2e.mjs --only=continuity`. This covers:
+   - the code word survives a switch from `qwen3.5:4b` to `qwen3.5:9b`
+   - the divider and handoff note
+   - memory reaching a new chat
+   - summarizing with a 4096-token window, which keeps "the shed key is under the blue pot"
+5. Close the app, start it again **without** `-Fresh`, then `node scripts/e2e.mjs --only=restart`. This checks:
+   - the "Last time" card shows the codename Kestrel
+   - the 9B model says what we were working on
+6. Regression check, because chat moved to Ollama's native API: `node scripts/e2e.mjs --only=chat,stop,ui,identity,memory,safety`. In particular, check:
+   - thinking still shows in its own section
+   - Stop still stops the reply
+   - the "Hit max-token limit" badge still appears
+7. By hand:
+   - Open Settings and check the Context window field.
+   - In Task Manager, compare the VRAM of `qwen3.5:9b` and `qwen3.8:27b` with the earlier numbers. The window used to be Ollama's default; it is now 8192.
+   - Check that the top bar's Project dropdown doesn't overlap the "loaded models" pill at your window size (in a 1200 px mock it looked tight).
