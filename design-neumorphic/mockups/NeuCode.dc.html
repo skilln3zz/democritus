@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Democritus — Coding agent</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700;800&amp;family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=IBM+Plex+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#ECE8E1}
+a{color:#2D2A26}a:hover{color:#B5582A}
+button{font-family:inherit}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid #B5582A;outline-offset:3px}
+</style>
+</helmet>
+<div style="min-height: 900px; box-sizing: border-box; padding: 22px 26px 26px; background: #ECE8E1; color: #2D2A26; font-family: 'Figtree', sans-serif; font-size: 15px; font-weight: 500; line-height: 1.55; display: flex; flex-direction: column; gap: 18px">
+
+  <!-- Header -->
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px">
+    <a href="NeuChat.dc.html" aria-label="Back to chat" style="width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; box-shadow: 5px 5px 10px #CEC8BD, -5px -5px 10px #FFFFFF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></a>
+    <h1 style="margin: 0; font-family: 'Fraunces', serif; font-weight: 600; font-size: 32px; letter-spacing: 0.3px; line-height: 1.1">Coding agent</h1>
+
+    <div style="margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+      <span style="display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 16px; border-radius: 23px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #2D2A26; box-shadow: inset 4px 4px 9px #D2CCC1, inset -4px -4px 9px #FFFFFF">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F594F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h6l2 2h8v11H4z"></path></svg>
+        D:\projects\invoices
+      </span>
+      <button style="height: 46px; padding: 0 16px; border: none; border-radius: 23px; background: #ECE8E1; color: #5F594F; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 5px 5px 10px #CEC8BD, -5px -5px 10px #FFFFFF">Change folder</button>
+      <button onClick="{{ toggleAgent }}" role="switch" aria-checked="{{ agentOn }}" style="{{ agentBtnStyle }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg>
+        {{ agentBtnLabel }}
+      </button>
+    </div>
+  </header>
+
+  <!-- Safety strip -->
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 13px 20px; border-radius: 22px; font-size: 13px; font-weight: 600; color: #5F594F; box-shadow: inset 4px 4px 9px #D2CCC1, inset -4px -4px 9px #FFFFFF">
+    <span style="display: flex; align-items: center; gap: 8px; color: #2D2A26"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4E9B6A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>Sandbox: this folder only</span>
+    <span>Can't run commands</span>
+    <span>No internet</span>
+    <span>Every write needs your approval</span>
+    <span style="display: flex; align-items: center; gap: 8px">Step <strong style="color: #2D2A26">{{ stepNum }}</strong> of 20</span>
+    <button onClick="{{ stop }}" style="{{ stopStyle }}"><span style="width: 10px; height: 10px; border-radius: 2px; background: currentColor" aria-hidden="true"></span>Stop agent</button>
+  </div>
+
+  <!-- Conversation -->
+  <section aria-label="Messages" style="flex: 1; display: flex; flex-direction: column; gap: 22px; padding: 4px 4% 0">
+
+    <div style="align-self: flex-end; max-width: 70%; padding: 14px 20px; border-radius: 22px 22px 6px 22px; box-shadow: inset 5px 5px 10px #D2CCC1, inset -5px -5px 10px #FFFFFF">
+      The VAT total is wrong on invoices with a discount. Find it and fix it.
+    </div>
+
+    <div style="display: flex; align-items: flex-start; gap: 18px; max-width: 92%">
+      <div style="flex: none; width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; box-shadow: 5px 5px 12px #C9BFAF, -5px -5px 12px #FFFFFF">
+        <div style="width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; overflow: hidden; background: #ECE8E1; box-shadow: inset 3px 3px 6px #D2CCC1, inset -3px -3px 6px #FFFFFF">
+          <canvas ref="{{ setCanvas }}" width="88" height="88" role="img" aria-label="{{ orbLabel }}" style="width: 44px; height: 44px; display: block"></canvas>
+        </div>
+      </div>
+
+      <article style="flex: 1; min-width: 0; padding: 18px 22px; border-radius: 24px 24px 24px 6px; box-shadow: 8px 8px 18px #CEC8BD, -8px -8px 18px #FFFFFF; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; color: #5F594F; padding: 2px 8px; border-radius: 10px; box-shadow: inset 2px 2px 4px #D2CCC1, inset -2px -2px 4px #FFFFFF">qwen3-coder</span>
+        </div>
+
+        <!-- Status line + thoughts toggle, like chat -->
+        <sc-if value="{{ isWorking }}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; font-size: 16px; color: #5F594F">Working it out… <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{ tokens }} thoughts so far</span></p>
+        </sc-if>
+        <sc-if value="{{ isDoneWorking }}" hint-placeholder-val="{{ true }}">
+          <span style="font-size: 13px; font-weight: 600; color: #5F594F">{{ workedLine }}</span>
+        </sc-if>
+        <button onClick="{{ toggleThink }}" aria-expanded="{{ thinkOpen }}" style="align-self: flex-start; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; border: none; border-radius: 17px; background: #ECE8E1; color: #5F594F; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 4px 4px 8px #CEC8BD, -4px -4px 8px #FFFFFF">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="{{ thinkChevron }}"></path></svg>{{ thinkLabel }}
+        </button>
+        <sc-if value="{{ thinkOpen }}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; padding: 12px 16px; border-radius: 16px; font-size: 14px; font-weight: 500; color: #5F594F; box-shadow: inset 3px 3px 7px #D2CCC1, inset -3px -3px 7px #FFFFFF">Discounts are applied in invoice.ts, VAT is computed in totals.ts. Search for vat to find every place it's calculated, then read the call site to see which value it's based on.</p>
+        </sc-if>
+
+        <!-- Tool steps, inside the reply -->
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <sc-for list="{{ steps }}" as="s" hint-placeholder-count="3">
+            <div style="display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 16px; border-radius: 16px; font-size: 14px; box-shadow: inset 3px 3px 7px #D2CCC1, inset -3px -3px 7px #FFFFFF">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ s.color }}" stroke-width="{{ s.weight }}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ s.icon }}"></path></svg>
+              <span>{{ s.verb }} <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">{{ s.target }}</span></span>
+              <span style="margin-left: auto; font-size: 12px; font-weight: 700; color: #5F594F">{{ s.meta }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ isStopped }}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; font-weight: 600; color: #C0453A">Stopped by you. Nothing was written to your folder.</p>
+        </sc-if>
+
+        <!-- Answer + proposed change -->
+        <sc-if value="{{ hasAnswer }}" hint-placeholder-val="{{ true }}">
+          <p style="margin: 0">The VAT is taken from the price before the discount is applied. I'd move the VAT calculation after the discount in <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">src/invoice.ts</span>:</p>
+
+          <div style="border-radius: 18px; overflow: hidden; box-shadow: inset 4px 4px 9px #D2CCC1, inset -4px -4px 9px #FFFFFF">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px 6px">
+              <span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700">
+                <span style="{{ cardDot }}" aria-hidden="true"></span>{{ cardTitle }}
+              </span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #5F594F">src/invoice.ts · line 48</span>
+              <span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #5F594F">+3 −2</span>
+            </div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.75; padding-bottom: 10px">
+              <div style="padding: 3px 16px; background: rgba(192,69,58,0.12); border-left: 3px solid #C0453A; color: #7A3A33">- const vat = subtotal * rate;</div>
+              <div style="padding: 3px 16px; background: rgba(192,69,58,0.12); border-left: 3px solid #C0453A; color: #7A3A33">- const total = subtotal - discount + vat;</div>
+              <div style="padding: 3px 16px; background: rgba(78,155,106,0.16); border-left: 3px solid #4E9B6A; color: #2E5E42">+ const taxable = subtotal - discount;</div>
+              <div style="padding: 3px 16px; background: rgba(78,155,106,0.16); border-left: 3px solid #4E9B6A; color: #2E5E42">+ const vat = taxable * rate;</div>
+              <div style="padding: 3px 16px; background: rgba(78,155,106,0.16); border-left: 3px solid #4E9B6A; color: #2E5E42">+ const total = taxable + vat;</div>
+            </div>
+          </div>
+
+          <sc-if value="{{ isPending }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+              <button onClick="{{ approve }}" style="height: 44px; padding: 0 24px; border: none; border-radius: 22px; background: #B5582A; color: #FFFFFF; font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 5px 5px 11px #C9BFAF, -5px -5px 11px #FFFFFF">Approve</button>
+              <button onClick="{{ reject }}" style="height: 44px; padding: 0 22px; border: none; border-radius: 22px; background: #ECE8E1; color: #2D2A26; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 5px 5px 11px #CEC8BD, -5px -5px 11px #FFFFFF">Reject</button>
+              <button style="height: 44px; padding: 0 22px; border: none; border-radius: 22px; background: #ECE8E1; color: #2D2A26; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 5px 5px 11px #CEC8BD, -5px -5px 11px #FFFFFF">Edit first</button>
+              <span style="font-size: 13px; font-weight: 600; color: #5F594F">Nothing is written to your folder until you approve.</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isDecided }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+              <span style="{{ resultStyle }}">{{ resultLabel }}</span>
+              <span style="font-size: 13px; font-weight: 600; color: #5F594F">{{ resultNote }}</span>
+              <sc-if value="{{ isApproved }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ undo }}" style="margin-left: auto; height: 38px; padding: 0 16px; border: none; border-radius: 19px; background: #ECE8E1; color: #B5582A; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 4px 4px 8px #CEC8BD, -4px -4px 8px #FFFFFF">Undo</button>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <button aria-label="Good answer" style="width: 38px; height: 38px; border: none; border-radius: 50%; background: #ECE8E1; color: #2D2A26; display: grid; place-items: center; cursor: pointer; box-shadow: 4px 4px 8px #CEC8BD, -4px -4px 8px #FFFFFF"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h6a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"></path></svg></button>
+            <button aria-label="Bad answer" style="width: 38px; height: 38px; border: none; border-radius: 50%; background: #ECE8E1; color: #2D2A26; display: grid; place-items: center; cursor: pointer; box-shadow: 4px 4px 8px #CEC8BD, -4px -4px 8px #FFFFFF"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 13V4h3v9zM17 13l-4 8a2 2 0 0 1-2-2v-4H5a2 2 0 0 1-2-2l2-7a2 2 0 0 1 2-2h10"></path></svg></button>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; color: #5F594F">39 tok/s · {{ tokens }} tokens</span>
+          </div>
+        </sc-if>
+      </article>
+    </div>
+  </section>
+
+  <!-- Composer: same as chat, without the coding-agent button -->
+  <div style="padding: 14px 14px 14px 18px; border-radius: 30px; display: flex; align-items: center; gap: 14px; box-shadow: 8px 8px 18px #CEC8BD, -8px -8px 18px #FFFFFF">
+    <button aria-label="Attach a text file" style="flex: none; width: 46px; height: 46px; border: none; border-radius: 50%; background: #ECE8E1; color: #5F594F; display: grid; place-items: center; cursor: pointer; box-shadow: 4px 4px 8px #CEC8BD, -4px -4px 8px #FFFFFF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"></path></svg></button>
+    <label for="agent-composer" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Tell the agent what to do</label>
+    <textarea id="agent-composer" rows="1" placeholder="Tell the agent what to do in this folder…   Enter to send · Shift+Enter for a new line" style="flex: 1; min-width: 0; resize: none; border: none; outline: none; border-radius: 23px; padding: 13px 20px; background: #ECE8E1; font-family: inherit; font-size: 14px; color: #2D2A26; box-shadow: inset 4px 4px 9px #D2CCC1, inset -4px -4px 9px #FFFFFF"></textarea>
+    <button aria-label="Send" style="flex: none; width: 54px; height: 54px; border: none; border-radius: 50%; background: #B5582A; color: #FFFFFF; display: grid; place-items: center; cursor: pointer; box-shadow: 5px 5px 12px #C9BFAF, -5px -5px 12px #FFFFFF"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // phase: working -> waiting (for your approval) -> approved / rejected; or stopped
+    this.state = { agentOn: true, phase: 'working', shown: 0, tokens: 0, thinkOpen: false };
+    this.I = 0; this.target = 0.3; this.nextTok = 0; this.tokCount = 0; this.lastUi = 0;
+    this.burst = 0; this.nextBurst = 0;
+    this.revealAt = [900, 2500, 4100];
+    this.doneAt = 6000;
+    this.setCanvas = (el) => { this.canvas = el; };
+  }
+  componentDidMount() {
+    this.start = performance.now();
+    try { this.reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { this.reduce = false; }
+    const loop = (now) => { this.tick(now); this.raf = requestAnimationFrame(loop); };
+    this.raf = requestAnimationFrame(loop);
+  }
+  componentWillUnmount() { cancelAnimationFrame(this.raf); }
+  tick(now) {
+    const working = this.state.agentOn && this.state.phase === 'working';
+    if (working) {
+      const el = now - this.start;
+      if (now > this.nextTok) {
+        this.target = Math.min(1, this.target + 0.25 + Math.random() * 0.35);
+        this.tokCount += 1;
+        this.nextTok = now + (Math.random() < 0.15 ? 400 + Math.random() * 500 : 40 + Math.random() * 120);
+      }
+      this.target = Math.max(0.26, this.target * 0.955);
+      if (this.nextBurst === 0) this.nextBurst = now + 2000;
+      if (now > this.nextBurst) { this.burst = 1; this.nextBurst = now + 3000 + Math.random() * 4000; }
+      let shown = 0;
+      for (const t of this.revealAt) if (el > t) shown += 1;
+      if (el > this.doneAt) {
+        this.setState({ phase: 'waiting', shown: 3, tokens: this.tokCount });
+      } else if (shown !== this.state.shown || now - this.lastUi > 160) {
+        this.lastUi = now;
+        this.setState({ shown, tokens: this.tokCount });
+      }
+    } else if (this.state.phase === 'waiting' && this.state.agentOn) {
+      this.target = 0.1;   // calm, slow breathing: it is waiting for you, not working
+    } else {
+      this.target = 0.04;
+    }
+    this.burst *= working ? 0.95 : 0.88;
+    this.I += (this.target - this.I) * 0.16;
+    this.draw(now / 1000);
+  }
+  draw(t) {
+    const c = this.canvas; if (!c) return;
+    const ctx = c.getContext('2d'); if (!ctx) return;
+    const W = c.width, H = c.height, cx = W / 2, cy = H / 2 - W * 0.015;
+    const I = this.reduce ? this.I * 0.4 : this.I;
+    const sp = this.reduce ? 0.3 : 1;
+    const B = this.reduce ? this.burst * 0.3 : this.burst;
+    const TWO = Math.PI * 2;
+    const N = 11;
+    const R = W * 0.165 * (1 - 0.12 * I);
+    const S = W * 0.21 * I * (1 + 0.28 * B);
+    const rot = t * 0.3 * sp;
+    const hw = (Math.PI / N) * 0.62;
+    const amps = [], ths = [], hws = [];
+    for (let k = 0; k < N; k++) {
+      const ph2 = k * 2.399;
+      const n1 = Math.sin(t * (3.4 + 1.7 * Math.sin(ph2)) * sp + ph2 * 1.7);
+      const n2 = Math.sin(t * (5.3 + 2.3 * Math.cos(ph2 * 1.3)) * sp + ph2 * 4.1);
+      const n3 = Math.sin(t * 1.31 * sp + ph2 * 2.9);
+      let v = 0.5 + 0.5 * (0.5 * n1 + 0.32 * n2 + 0.18 * n3);
+      v = v * v * (3 - 2 * v);
+      v = v * v * (3 - 2 * v);
+      let A = 0.1 + 0.9 * v;
+      A = A + (1 - A) * 0.8 * B;
+      amps.push(A);
+      ths.push(k * TWO / N + rot + hw * 0.5 * Math.sin(t * 1.1 * sp + ph2 * 5.1));
+      hws.push(hw * (0.68 + 0.6 * (0.5 + 0.5 * Math.sin(ph2 * 3.7 + t * 0.6 * sp))));
+    }
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.filter = 'blur(' + Math.round(W * 0.034) + 'px)';
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.beginPath(); ctx.ellipse(cx, cy + R + W * 0.14, R * 1.05, W * 0.04, 0, 0, TWO); ctx.fill();
+    ctx.restore();
+    const path = new Path2D();
+    for (let i = 0; i <= 540; i++) {
+      const a = (i / 540) * TWO;
+      let r = R * (1 + 0.055 * Math.sin(2 * a + t * 1.9 * sp) + 0.038 * Math.sin(3 * a - t * 3.0 * sp) + 0.022 * Math.sin(5 * a + t * 4.6 * sp));
+      for (let k = 0; k < N; k++) {
+        let d = a - ths[k];
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        const w = hws[k];
+        if (d > -w && d < w) {
+          const u = Math.cos((d / w) * Math.PI / 2);
+          r += S * amps[k] * (0.28 * Math.pow(u, 1.1) + 0.72 * Math.pow(u, 5));
+        }
+      }
+      const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 1.04;
+      if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    path.closePath();
+    const g = ctx.createRadialGradient(cx - R * 0.4, cy - R * 0.5, 2, cx, cy, R + S);
+    g.addColorStop(0, '#8e8e8e'); g.addColorStop(0.16, '#3c3c3c'); g.addColorStop(0.42, '#141414'); g.addColorStop(1, '#030303');
+    ctx.fillStyle = g; ctx.fill(path);
+    ctx.save();
+    ctx.clip(path);
+    ctx.filter = 'blur(' + Math.round(W * 0.022) + 'px)';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.ellipse(cx - R * 0.33, cy - R * 0.45, R * 0.3, R * 0.13, -0.6, 0, TWO); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.ellipse(cx + R * 0.35, cy + R * 0.5, R * 0.35, R * 0.12, -0.5, 0, TWO); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 2; ctx.stroke(path);
+  }
+  renderVals() {
+    const ph = this.state.phase;
+    const on = this.state.agentOn;
+    const working = ph === 'working';
+    const all = [
+      { verb: 'Read', target: 'src/totals.ts', meta: '0.3 s', running: 'Reading' },
+      { verb: 'Searched the folder for', target: 'vat', meta: '6 matches', running: 'Searching the folder for' },
+      { verb: 'Read', target: 'src/invoice.ts', meta: '0.2 s', running: 'Reading' }
+    ];
+    const shown = working ? this.state.shown : (ph === 'stopped' ? this.state.shown : 3);
+    const steps = [];
+    for (let i = 0; i < all.length; i++) {
+      if (i < shown) {
+        steps.push({ verb: all[i].verb, target: all[i].target, meta: all[i].meta, icon: 'M5 12l5 5L20 7', color: '#4E9B6A', weight: '2.4' });
+      } else if (i === shown && working && on) {
+        steps.push({ verb: all[i].running, target: all[i].target + '…', meta: '', icon: 'M12 12h.01', color: '#B5582A', weight: '7' });
+        break;
+      }
+    }
+    const decided = ph === 'approved' || ph === 'rejected';
+    const canStop = on && (working || ph === 'waiting');
+    return {
+      setCanvas: this.setCanvas,
+      orbLabel: !on ? 'The agent is off' : working ? 'The agent is working' : ph === 'waiting' ? 'Waiting for your approval' : 'The agent is idle',
+      agentOn: on,
+      agentBtnLabel: on ? 'Agent on' : 'Agent off',
+      agentBtnStyle: 'display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 20px; border: none; border-radius: 23px; font-size: 14px; font-weight: 700; cursor: pointer; ' + (on ? 'background: #B5582A; color: #FFFFFF; box-shadow: 5px 5px 11px #C9BFAF, -5px -5px 11px #FFFFFF;' : 'background: #ECE8E1; color: #5F594F; box-shadow: inset 4px 4px 9px #D2CCC1, inset -4px -4px 9px #FFFFFF;'),
+      toggleAgent: () => this.setState({ agentOn: !on, phase: (!on || !(working || ph === 'waiting')) ? ph : 'stopped' }),
+      stepNum: Math.min(20, shown + (working ? 1 : ph === 'stopped' ? 0 : 1)),
+      stopStyle: 'margin-left: auto; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border: none; border-radius: 19px; background: #ECE8E1; font-size: 13px; font-weight: 700; ' + (canStop ? 'color: #C0453A; cursor: pointer; box-shadow: 4px 4px 9px #CEC8BD, -4px -4px 9px #FFFFFF;' : 'color: #A39C91; cursor: default; box-shadow: inset 3px 3px 7px #D2CCC1, inset -3px -3px 7px #FFFFFF;'),
+      stop: () => { if (canStop) this.setState({ phase: 'stopped' }); },
+      isWorking: working,
+      isDoneWorking: !working,
+      workedLine: ph === 'stopped' ? 'Stopped after ' + shown + ' steps' : 'Worked for 6 seconds · 3 steps · ' + this.state.tokens + ' thoughts, hidden',
+      tokens: this.state.tokens,
+      thinkOpen: this.state.thinkOpen,
+      thinkLabel: this.state.thinkOpen ? 'Hide thoughts' : 'Show thoughts',
+      thinkChevron: this.state.thinkOpen ? 'M6 9l6 6 6-6' : 'M9 6l6 6-6 6',
+      toggleThink: () => this.setState({ thinkOpen: !this.state.thinkOpen }),
+      steps,
+      isStopped: ph === 'stopped',
+      hasAnswer: ph === 'waiting' || decided,
+      isPending: ph === 'waiting',
+      isDecided: decided,
+      isApproved: ph === 'approved',
+      cardTitle: ph === 'approved' ? 'Change applied' : ph === 'rejected' ? 'Change rejected' : 'Proposed change · waiting for you',
+      cardDot: 'width: 10px; height: 10px; border-radius: 50%; background: ' + (ph === 'approved' ? '#4E9B6A' : ph === 'rejected' ? '#A39C91' : '#B5582A') + ';',
+      resultLabel: ph === 'approved' ? 'Applied ✓' : 'Rejected',
+      resultStyle: 'display: flex; align-items: center; height: 38px; padding: 0 18px; border-radius: 19px; font-size: 14px; font-weight: 700; ' + (ph === 'approved' ? 'background: #4E9B6A; color: #FFFFFF; box-shadow: 4px 4px 9px #BFC4BA, -4px -4px 9px #FFFFFF;' : 'color: #5F594F; box-shadow: inset 3px 3px 7px #D2CCC1, inset -3px -3px 7px #FFFFFF;'),
+      resultNote: ph === 'approved' ? 'Written to src/invoice.ts · logged' : 'Nothing was written. Tell the agent what to try instead.',
+      approve: () => this.setState({ phase: 'approved' }),
+      reject: () => this.setState({ phase: 'rejected' }),
+      undo: () => this.setState({ phase: 'waiting' })
+    };
+  }
+}
+</script>
+</body>
+</html>

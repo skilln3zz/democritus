@@ -9,7 +9,7 @@
 <x-dc>
 <helmet>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700;800&amp;family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=IBM+Plex+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
 <style>
 body{margin:0;background:#ECE8E1}
 a{color:#2D2A26}a:hover{color:#B5582A}
@@ -97,8 +97,8 @@ class Component extends DCLogic {
       return {
         ...d,
         on,
-        trackStyle: 'flex: none; width: 64px; height: 34px; border: none; border-radius: 17px; padding: 4px; box-sizing: border-box; cursor: pointer; display: flex; background: ' + (on ? '#B5582A' : '#ECE8E1') + '; justify-content: ' + (on ? 'flex-end' : 'flex-start') + '; box-shadow: inset 3px 3px 7px ' + (on ? '#8F4421' : '#D2CCC1') + ', inset -3px -3px 7px ' + (on ? '#CF7446' : '#FFFFFF') + ';' + (locked ? ' opacity: 0.45;' : ''),
-        knobStyle: 'width: 26px; height: 26px; border-radius: 50%; display: block; background: #ECE8E1; box-shadow: 2px 2px 5px rgba(0,0,0,0.18), -1px -1px 3px #FFFFFF;',
+        trackStyle: 'flex: none; width: 64px; height: 34px; border: 1.5px solid ' + (on ? '#8F4421' : '#C6BCA8') + '; border-radius: 17px; padding: 4px; box-sizing: border-box; cursor: pointer; display: flex; background: ' + (on ? '#B5582A' : '#ECE8E1') + '; justify-content: ' + (on ? 'flex-end' : 'flex-start') + '; box-shadow: inset 3px 3px 7px ' + (on ? '#8F4421' : '#D2CCC1') + ', inset -3px -3px 7px ' + (on ? '#CF7446' : '#FFFFFF') + ';' + (locked ? ' opacity: 0.45;' : ''),
+        knobStyle: 'width: 26px; height: 26px; border-radius: 50%; display: block; border: 1px solid #C6BCA8; box-sizing: border-box; background: #ECE8E1; box-shadow: 2px 2px 5px rgba(0,0,0,0.18), -1px -1px 3px #FFFFFF;',
         toggle: () => { if (!locked) this.setState({ on: { ...this.state.on, [d.key]: !this.state.on[d.key] } }); }
       };
     });
