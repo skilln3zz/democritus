@@ -21,6 +21,9 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 tokio = { version = "=1.53.3", features = ["sync", "macros", "time"] }
 # Checksums for approved downloads (already in the local cargo cache via Tauri).
 sha2 = "=0.10.9"
+# Native folder picker for the coding agent. Opened only from Rust
+# (agent_pick_folder); the webview gets no dialog permission.
+tauri-plugin-dialog = "=2.8.3"
 
 [profile.release]
 codegen-units = 1

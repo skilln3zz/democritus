@@ -1176,9 +1176,43 @@ input.switch:disabled {
   box-shadow: inset 3px 3px 6px var(--shade-inset), inset -3px -3px 6px var(--shade-light);
 }
 .orb-well canvas {
+  position: relative;
   display: block;
   width: 44px;
   height: 44px;
+}
+.orb-well {
+  position: relative;
+}
+/* 3D orb layers: a halo behind it on dark backgrounds (its opacity follows the
+   work), a soft floor shadow on light ones. The 2D orb draws its own. */
+.orb-halo,
+.orb-floor {
+  position: absolute;
+  pointer-events: none;
+}
+.orb-halo {
+  inset: -8%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(232, 121, 58, 0.62) 0%, rgba(232, 121, 58, 0.26) 34%, rgba(232, 121, 58, 0) 68%);
+  opacity: 0;
+}
+.orb-floor {
+  left: 50%;
+  top: 66%;
+  width: 46%;
+  height: 12%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0.08) 45%, rgba(0, 0, 0, 0) 72%);
+}
+:root:not([data-theme='dark']) .orb-halo,
+:root[data-theme='dark'] .orb-floor,
+[data-renderer='2d'] > .orb-halo,
+[data-renderer='2d'] > .orb-floor,
+[data-renderer='2d'] .orb-well > .orb-halo,
+[data-renderer='2d'] .orb-well > .orb-floor {
+  display: none;
 }
 
 /* thinking */
@@ -2655,24 +2689,123 @@ legend + * {
   height: 16px;
   stroke-width: 1.8;
 }
+/* the backend's folder, shown read-only */
 #code-folder {
   min-width: 0;
   max-width: 46vw;
-  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink);
+  font-size: 13px;
+}
+#code-folder.is-empty {
+  color: var(--muted);
+}
+.code-folder-chip {
+  min-width: 0;
+}
+
+/* Change folder: a small raised panel under the button */
+.code-folder-wrap {
+  position: relative;
+}
+.code-folder-pop {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 12px);
+  z-index: 30;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 12px 12px 26px var(--popover-shadow), -10px -10px 22px var(--shade-light);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.code-folder-browse {
+  align-self: flex-start;
+}
+.code-folder-browse .rail-icon {
+  display: grid;
+}
+.code-folder-browse svg {
+  width: 15px;
+  height: 15px;
+}
+.code-folder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.code-folder-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.code-folder-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+#code-folder-paste {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 16px;
   border: none;
-  outline: none;
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: var(--inset-sm);
+}
+#code-folder-paste:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.code-folder-error {
+  padding: 8px 12px;
+  border-radius: 14px;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--inset-xs);
+  overflow-wrap: anywhere;
+}
+.code-folder-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#code-folder-recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.code-folder-recent-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 14px;
   background: transparent;
   color: var(--ink);
   font-size: 13px;
-  box-shadow: none;
-  text-overflow: ellipsis;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
-#code-folder[readonly] {
-  cursor: default;
+.code-folder-recent-btn:hover:not(:disabled) {
+  color: var(--accent-text);
+  box-shadow: var(--raised-xs);
 }
-.code-folder-chip.editing {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
+.code-folder-recent-btn[aria-current='true'] {
+  box-shadow: var(--inset-xs);
 }
 .code-head-btn {
   height: 46px;
@@ -2754,6 +2887,14 @@ legend + * {
 .code-safety-sandbox svg {
   width: 15px;
   height: 15px;
+}
+#code-sandbox-path {
+  overflow-wrap: anywhere;
+}
+/* the backend refused the folder (or none is chosen): no sandbox, nothing will run */
+.code-safety-sandbox.is-refused,
+.code-safety-sandbox.is-refused .rail-icon {
+  color: var(--danger);
 }
 .code-stop-btn {
   margin-left: auto;
@@ -3134,9 +3275,156 @@ legend + * {
 .code-run .error-box {
   max-width: 92%;
 }
+
+/* the conversation, and the activity panel beside it when shown */
+.code-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 22px;
+}
+#page-code.with-activity .code-body {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 40%);
+}
+.code-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.code-activity-btn[aria-pressed='true'] {
+  color: var(--accent-text);
+  box-shadow: var(--inset-sm);
+}
+
+/* activity panel: a raised frame around a terminal surface (dark in both themes) */
+:root {
+  --term-bg: #24221f;
+  --term-text: #e6e1d8;
+  --term-dim: #a39c90;
+  --term-tag: #e8a06e;
+  --term-ok: #8fcf9f;
+  --term-error: #ff8d80;
+}
+:root[data-theme='dark'] {
+  --term-bg: #0f1113;
+  --term-text: #d8d3ca;
+  --term-dim: #8c867c;
+  --term-tag: #e8793a;
+  --term-ok: #7cc495;
+  --term-error: #f08478;
+}
+.code-activity {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 26px;
+  background: var(--surface);
+  box-shadow: var(--raised-md);
+}
+.activity-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.activity-title {
+  font: 600 18px/1.2 var(--display);
+}
+.activity-tools {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.activity-tools .pill-btn.small {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+#activity-pause[aria-pressed='true'] {
+  color: var(--accent-text);
+  box-shadow: var(--inset-sm);
+}
+.activity-log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--term-bg);
+  color: var(--term-text);
+  font: 500 12px/1.55 var(--mono);
+  box-shadow: inset 3px 3px 8px rgba(0, 0, 0, 0.45);
+}
+.activity-log:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.act-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.act-time {
+  color: var(--term-dim);
+  margin-right: 1ch;
+}
+.act-tag {
+  display: inline-block;
+  min-width: 9ch;
+  margin-right: 1ch;
+  color: var(--term-tag);
+  font-weight: 600;
+}
+.act-line[data-tag='THINK'] .act-text {
+  color: var(--term-dim);
+}
+.act-line[data-tag='WRITTEN'] .act-tag,
+.act-line[data-tag='APPROVED'] .act-tag {
+  color: var(--term-ok);
+}
+.act-line.is-error,
+.act-line.is-error .act-tag,
+.act-result.is-error {
+  color: var(--term-error);
+}
+.act-empty {
+  color: var(--term-dim);
+}
+@media (max-width: 900px) {
+  /* narrow: the panel covers the conversation until it is hidden again */
+  #page-code.with-activity .code-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .code-activity {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+  /* the folder panel anchors to the whole controls row */
+  .code-head-controls {
+    position: relative;
+  }
+  .code-folder-wrap {
+    position: static;
+  }
+  .code-folder-pop {
+    width: auto;
+    right: 0;
+  }
+}
 @media (max-width: 1180px), (max-height: 760px) {
   #page-code {
     padding: 18px;
+    gap: 14px;
+  }
+  .code-main {
     gap: 14px;
   }
 }
@@ -3280,10 +3568,17 @@ legend + * {
   box-shadow: none;
 }
 .orb-large {
+  position: relative;
   display: block;
   width: min(380px, 30vh, 100%);
   height: auto;
   aspect-ratio: 1;
+}
+.orb-large canvas {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .bd-orb-text {
   display: flex;

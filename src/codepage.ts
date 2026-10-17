@@ -4,13 +4,14 @@
 // the tool steps as they happen, the explanation and every proposed change as
 // a diff with Approve / Reject. Nothing is written until you press Approve, and
 // once you decide, the buttons are replaced by the result.
-import { api, type AgentEvent, type PlannedEdit } from './api';
+import { activityEvent, activityTask, changeCounts, initActivity, showActivity } from './activitypanel';
+import { api, type AgentEvent, type FolderState, type PlannedEdit } from './api';
 import { diffLines } from './diff';
 import { icons } from './icons';
 import { renderMarkdown } from './markdown';
 import { AGENT_TUNING, FerroOrb } from './orb';
 import { getOperator, onOperatorChange, setCodingAgentAllowed } from './operatorpage';
-import { currentPage, onShow } from './pages';
+import { currentPage, onLeave, onShow } from './pages';
 import { $, errorText, escapeText, toast } from './ui';
 
 interface Deps {
@@ -19,7 +20,6 @@ interface Deps {
   defaultModel: () => string;
 }
 
-const FOLDER_KEY = 'democritus.codeFolder';
 const MODEL_KEY = 'democritus.codeModel';
 const MAX_DIFF_LINES = 400;
 /** The backend's step limit per run (MAX_STEPS in src-tauri/src/agent.rs). */
@@ -37,6 +37,11 @@ let taskId = '';
 let running = false;
 let stopping = false;
 let homeBackups = '';
+
+/** The backend's folder, as it last reported it. The chip and the strip show only this. */
+let folderState: FolderState = { folder: null, error: null, recent: [] };
+/** Bumped by every folder request, so an older answer never overwrites a newer one. */
+let folderSeq = 0;
 
 /** One run of the agent: everything it does for one request, in one reply card. */
 interface Run {
@@ -81,7 +86,8 @@ const store = {
 
 const log = () => $('#code-log');
 const input = () => $<HTMLTextAreaElement>('#code-input');
-const folderInput = () => $<HTMLInputElement>('#code-folder');
+const folderPop = () => $('#code-folder-pop');
+const changeFolderBtn = () => $<HTMLButtonElement>('#code-change-folder');
 const modelSelect = () => $<HTMLSelectElement>('#code-model');
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
@@ -104,8 +110,9 @@ function setRunning(on: boolean) {
   running = on;
   if (!on) stopping = false;
   modelSelect().disabled = on;
-  folderInput().disabled = on;
-  ($('#code-change-folder') as HTMLButtonElement).disabled = on;
+  // The backend refuses folder changes during a run too.
+  if (on) closeFolderPop();
+  changeFolderBtn().disabled = on;
   ($('#code-new') as HTMLButtonElement).disabled = on;
   renderControls();
 }
@@ -160,7 +167,7 @@ async function loadModels() {
 function emptyLog() {
   log().innerHTML =
     `<div class="empty code-empty"><span class="code-empty-icon">${icons.code}</span><h2 class="section-title">Hand Democritus a coding task</h2>` +
-    `<p class="muted">Choose a project folder with <strong>Change folder</strong>, pick a brain (a <span class="mono">coder</span> model works best), and describe the change below. ` +
+    `<p class="muted">Pick a project folder with <strong>Change folder</strong>, pick a brain (a <span class="mono">coder</span> model works best), and describe the change below. ` +
     `The agent reads what it needs, then proposes each edit as a diff. Nothing is written to your folder until you press <strong>Approve</strong>.</p>` +
     `<p class="small muted">It can't run commands: when a build or tests are needed, it tells you which command to run.</p></div>`;
 }
@@ -368,9 +375,7 @@ function approvalBlock(r: Run, approvalId: string, callId: string, edit: Planned
   el.className = 'code-approval';
   el.dataset.state = 'waiting';
   el.dataset.call = callId;
-  const all = diffLines(edit.before, edit.after, 0);
-  const adds = all.filter((l) => l.kind === 'add').length;
-  const dels = all.filter((l) => l.kind === 'del').length;
+  const { adds, dels } = changeCounts(edit);
   el.innerHTML =
     `<div class="approval-head"><span class="approval-title"><span class="approval-dot" aria-hidden="true"></span><span class="approval-label">Proposed change · waiting for you</span></span>` +
     `<span class="mono approval-where"><span class="approval-path"></span><span class="approval-line"></span></span>` +
@@ -497,7 +502,14 @@ function onDone(r: Run, ev: Extract<AgentEvent, { type: 'done' }>) {
 }
 
 function onEvent(ev: AgentEvent) {
-  if (ev.type === 'started') taskId = ev.taskId;
+  // The activity panel sees every event first, as it arrives.
+  activityEvent(ev);
+  if (ev.type === 'started') {
+    taskId = ev.taskId;
+    // The folder this run really works in, as the backend reports it.
+    folderSeq++;
+    renderFolder({ ...folderState, folder: ev.folder, error: null });
+  }
   const r = run;
   if (!r) return;
   switch (ev.type) {
@@ -552,16 +564,18 @@ function onEvent(ev: AgentEvent) {
 async function start() {
   if (running) return;
   const message = input().value.trim();
-  const folder = folderInput().value.trim();
   const model = modelSelect().value;
   if (!message) return;
   if (!agentAllowed()) {
     renderAvailability();
     return;
   }
-  if (!folder) {
-    toast('Choose a project folder first.', 'error');
-    editFolder();
+  // The backend holds the folder and re-checks it here; without one nothing runs.
+  // (agent_run refuses too: the backend stays the authority.)
+  await refreshFolder();
+  if (!folderState.folder) {
+    toast('Pick a folder first.', 'error');
+    openFolderPop();
     return;
   }
   if (!model) {
@@ -581,8 +595,10 @@ async function start() {
   lastRun = run;
   $('#code-step').textContent = '0';
   setRunning(true);
+  showActivity(true);
+  activityTask(message);
   try {
-    await api.agentRun({ taskId, folder, model, message }, onEvent);
+    await api.agentRun({ taskId, model, message }, onEvent);
   } catch (e) {
     // Refused before it started (permission, folder, another task running).
     // It never ran, so there is no reply card; the reason goes under your request.
@@ -639,29 +655,147 @@ function newTask() {
 }
 
 // ---------- folder ----------
+// The backend holds the folder. The chip and the strip show only what it
+// reports (or what a run's `started` event says), never what was typed.
 
-function sizeFolder() {
-  const f = folderInput();
-  f.size = Math.max(16, Math.min(60, (f.value || f.placeholder).length + 1));
+/** Shows a FolderState from the backend: the chip, the strip and the Recent list. */
+function renderFolder(s: FolderState) {
+  const previous = folderState.folder;
+  folderState = s;
+  const chip = $('#code-folder');
+  chip.textContent = s.folder ?? 'No folder chosen';
+  chip.classList.toggle('is-empty', !s.folder);
+  const strip = $('.code-safety-sandbox');
+  strip.classList.toggle('is-refused', !s.folder);
+  const why = s.error ?? 'Pick a folder first.';
+  $('#code-sandbox-path').textContent = s.folder ?? `none — ${why}`;
+  strip.title = s.folder ? `The agent sees and changes only files inside ${s.folder}.` : why;
+  const list = $('#code-folder-recent');
+  list.replaceChildren(
+    ...s.recent.map((path) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'code-folder-recent-btn mono';
+      b.dataset.path = path;
+      b.textContent = path;
+      if (path === s.folder) b.setAttribute('aria-current', 'true');
+      li.append(b);
+      return li;
+    }),
+  );
+  if (!s.recent.length) {
+    const li = document.createElement('li');
+    li.className = 'small muted';
+    li.textContent = 'No recent folders yet.';
+    list.append(li);
+  }
+  // A different folder is a different task.
+  if (previous !== s.folder && taskId && !running) newTask();
 }
 
-/** "Change folder": the chip becomes an editable field; Enter or leaving it keeps the new folder. */
-function editFolder() {
-  const f = folderInput();
-  if (f.disabled) return;
-  f.readOnly = false;
-  f.closest('.code-folder-chip')!.classList.add('editing');
-  if (!f.value) f.placeholder = 'D:\\projects\\my-app';
-  f.focus();
-  f.select();
+/** Asks the backend for its folder (it re-checks it) and shows the answer. */
+async function refreshFolder() {
+  const seq = ++folderSeq;
+  try {
+    const s = await api.agentFolder();
+    if (seq === folderSeq && !running) renderFolder(s);
+  } catch (e) {
+    if (seq === folderSeq && !running) renderFolder({ folder: null, error: errorText(e), recent: folderState.recent });
+  }
 }
 
-function endEditFolder() {
-  const f = folderInput();
-  f.readOnly = true;
-  f.placeholder = 'No folder chosen';
-  f.closest('.code-folder-chip')!.classList.remove('editing');
-  sizeFolder();
+function folderPopOpen(): boolean {
+  return !folderPop().hidden;
+}
+
+function showFolderError(message: string) {
+  const err = $('#code-folder-error');
+  err.textContent = message;
+  err.hidden = !message;
+}
+
+function openFolderPop() {
+  if (changeFolderBtn().disabled) return;
+  showFolderError('');
+  folderPop().hidden = false;
+  changeFolderBtn().setAttribute('aria-expanded', 'true');
+  $<HTMLInputElement>('#code-folder-paste').value = '';
+  $('#code-folder-browse').focus();
+}
+
+function closeFolderPop(focusButton = false) {
+  if (!folderPopOpen()) return;
+  folderPop().hidden = true;
+  changeFolderBtn().setAttribute('aria-expanded', 'false');
+  if (focusButton) changeFolderBtn().focus();
+}
+
+/**
+ * Runs one folder request (paste, Recent or Browse). A refusal leaves the folder
+ * as it was and shows the backend's reason here and as a toast.
+ */
+async function folderRequest(req: () => Promise<FolderState | null>) {
+  const pop = folderPop();
+  if (pop.dataset.busy) return;
+  pop.dataset.busy = '1';
+  // Disabling drops the focus; it goes back afterwards unless the popover closes.
+  const had = document.activeElement as HTMLElement | null;
+  const controls = pop.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input');
+  controls.forEach((c) => (c.disabled = true));
+  showFolderError('');
+  const seq = ++folderSeq;
+  let close = false;
+  try {
+    const s = await req();
+    if (!s) return; // the dialog was cancelled
+    if (seq === folderSeq) renderFolder(s);
+    if (s.folder) close = true;
+    else showFolderError(s.error ?? 'Pick a folder first.');
+  } catch (e) {
+    const message = errorText(e);
+    showFolderError(message);
+    toast(message, 'error');
+  } finally {
+    delete pop.dataset.busy;
+    controls.forEach((c) => (c.disabled = false));
+  }
+  if (close) {
+    closeFolderPop();
+    input().focus();
+  } else if (folderPopOpen() && had && pop.contains(had)) {
+    had.focus();
+  }
+}
+
+function initFolderPop() {
+  changeFolderBtn().addEventListener('click', () => (folderPopOpen() ? closeFolderPop() : openFolderPop()));
+  $('#code-folder-browse').addEventListener('click', () => void folderRequest(() => api.agentPickFolder()));
+  $('#code-folder-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const path = $<HTMLInputElement>('#code-folder-paste').value.trim();
+    void folderRequest(() => api.agentSetFolder(path));
+  });
+  $('#code-folder-recent').addEventListener('click', (e) => {
+    const path = (e.target as HTMLElement).closest<HTMLButtonElement>('.code-folder-recent-btn')?.dataset.path;
+    if (path) void folderRequest(() => api.agentSetFolder(path));
+  });
+  folderPop().addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFolderPop(true);
+    }
+  });
+  // A click outside closes it (not while a request or the native dialog is open).
+  document.addEventListener('pointerdown', (e) => {
+    if (folderPopOpen() && !folderPop().dataset.busy && !(e.target as HTMLElement).closest('.code-folder-wrap')) closeFolderPop();
+  });
+  // So does tabbing out of it.
+  $('.code-folder-wrap').addEventListener('focusout', (e) => {
+    const to = e.relatedTarget as HTMLElement | null;
+    if (to && !to.closest('.code-folder-wrap') && !folderPop().dataset.busy) closeFolderPop();
+  });
 }
 
 function autoGrow() {
@@ -674,9 +808,9 @@ export function initCodePage(d: Deps) {
   deps = d;
   $('#code-send').innerHTML = icons.arrowUp;
   $('#code-step-max').textContent = String(MAX_STEPS);
-  folderInput().value = store.get(FOLDER_KEY);
-  sizeFolder();
   emptyLog();
+  initActivity(MAX_STEPS);
+  initFolderPop();
   void api.appPaths().then((p) => {
     homeBackups = `${p.home}\\backups\\agent\\`;
     $('.code-folder-chip').title += ` Before a file is changed, its old version is copied to ${homeBackups}<task>.`;
@@ -684,25 +818,14 @@ export function initCodePage(d: Deps) {
   onOperatorChange(renderAvailability);
   onShow('code', () => {
     renderAvailability();
-    if (!running) void loadModels();
-    if (!folderInput().value) editFolder();
-    else input().focus();
-  });
-  folderInput().addEventListener('change', () => {
-    store.set(FOLDER_KEY, folderInput().value.trim());
-    sizeFolder();
-    // A different folder is a different task.
-    if (taskId) newTask();
-  });
-  folderInput().addEventListener('input', sizeFolder);
-  folderInput().addEventListener('blur', endEditFolder);
-  folderInput().addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !folderInput().readOnly) {
-      e.preventDefault();
-      input().focus(); // blur commits it
+    if (!running) {
+      void loadModels();
+      // The re-check: the backend says whether its folder can still be used.
+      void refreshFolder();
     }
+    input().focus();
   });
-  $('#code-change-folder').addEventListener('click', editFolder);
+  onLeave('code', () => closeFolderPop());
   modelSelect().addEventListener('change', () => store.set(MODEL_KEY, modelSelect().value));
   $('#code-send').addEventListener('click', () => void start());
   $('#code-stop').addEventListener('click', () => void stop());
@@ -716,6 +839,11 @@ export function initCodePage(d: Deps) {
     }
   });
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && currentPage() === 'code' && folderPopOpen()) {
+      e.preventDefault();
+      closeFolderPop(true);
+      return;
+    }
     if (e.key === 'Escape' && running && currentPage() === 'code' && !document.querySelector('dialog[open]')) {
       e.preventDefault();
       void stop();

@@ -281,20 +281,32 @@ export interface PlannedEdit {
   newFile: boolean;
 }
 
+/** The coding agent's project folder, as the backend holds it (display form, e.g. D:\projects\app). */
+export interface FolderState {
+  folder: string | null;
+  /** Why there is no folder ("Pick a folder first.", or why the last one can't be used). */
+  error: string | null;
+  recent: string[];
+}
+
 export type AgentEvent =
-  | { type: 'started'; taskId: string; folder: string; numCtx: number }
+  | { type: 'started'; taskId: string; folder: string; numCtx: number; model: string }
   | { type: 'step'; step: number }
   | { type: 'thinking'; text: string }
   | { type: 'content'; text: string }
   | { type: 'toolCall'; callId: string; name: string; summary: string }
   | { type: 'toolResult'; callId: string; ok: boolean; summary: string }
   | { type: 'approval'; approvalId: string; callId: string; edit: PlannedEdit }
-  | { type: 'resolved'; approvalId: string; applied: boolean; message: string }
+  | { type: 'resolved'; approvalId: string; approved: boolean; applied: boolean; message: string }
+  /** A tool call that named a path outside the folder (or another off-limits path). */
+  | { type: 'refused'; tool: string; path: string; reason: string }
+  /** After each model step. */
+  | { type: 'stats'; step: number; tokens: number; tokensPerSec: number }
   | { type: 'done'; status: 'complete' | 'stopped' | 'limit' | 'error'; message: string; editsApplied: number; tokens: number };
 
+/** The backend uses the folder it holds (agent_set_folder / agent_pick_folder), never one sent here. */
 export interface AgentRunRequest {
   taskId: string;
-  folder: string;
   model: string;
   message: string;
 }
@@ -482,6 +494,14 @@ export const api = {
     channel.onmessage = onEvent;
     return invoke<void>('agent_run', { req, onEvent: channel });
   },
+  /** The folder the agent works in, as the backend holds it (re-checked on every call). */
+  agentFolder: () => invoke<FolderState>('agent_folder'),
+  /** Sets the folder; rejects with the reason when it is refused (the folder stays as it was). '' clears it. */
+  agentSetFolder: (folder: string) => invoke<FolderState>('agent_set_folder', { folder }),
+  /** Opens the native folder dialog; null when it was cancelled. */
+  agentPickFolder: () => invoke<FolderState | null>('agent_pick_folder'),
+  /** Saves the activity panel's text in Democritus's logs folder; resolves to the file's full path. */
+  agentSaveLog: (text: string) => invoke<string>('agent_save_log', { text }),
   agentRespond: (approvalId: string, approve: boolean, note: string) => invoke<void>('agent_respond', { approvalId, approve, note }),
   agentStop: () => invoke<void>('agent_stop'),
   agentForget: (taskId: string) => invoke<void>('agent_forget', { taskId }),

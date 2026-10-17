@@ -1,13 +1,15 @@
 //! The coding agent (Code page): the current brain works on one project folder
-//! with five tools. Listing, reading and searching run straight away; every
-//! edit or new file is shown to the operator as a diff and waits for Apply or
-//! Reject. It can't run commands or reach the internet. Uses Ollama's native
+//! (the sandbox, held here and picked with agent_pick_folder or
+//! agent_set_folder; see agentfolder.rs) with five tools. Listing, reading and
+//! searching run straight away; every edit or new file is shown to the
+//! operator as a diff and waits for Apply or Reject. It can't run commands or reach the internet. Uses Ollama's native
 //! tool calling (/api/chat with `tools`).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -16,8 +18,9 @@ use tauri::{Manager, State};
 use tokio::sync::{oneshot, Notify};
 
 use crate::agentcore::*;
-use crate::workspace::{PlannedEdit, Workspace};
-use crate::{home, identity, llm, ollama, AppState};
+use crate::agentfolder::{self, FolderState, Sandbox};
+use crate::workspace::{self, PlannedEdit, Workspace};
+use crate::{home, identity, llm, localtime, ollama, AppState};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -25,6 +28,9 @@ type CmdResult<T> = Result<T, String>;
 const MAX_STEPS: usize = 30;
 /// Characters per token, as in context.rs (conservative).
 const CHARS_PER_TOKEN: usize = 3;
+/// Largest activity log the Code page may save.
+const MAX_SAVED_LOG: usize = 5_000_000;
+const STOP_FIRST: &str = "Stop the agent before changing the folder.";
 
 // ---------- shared state ----------
 
@@ -36,6 +42,8 @@ pub struct AgentHub {
     tasks: Mutex<HashMap<String, Task>>,
     /// The task running now, if any (one at a time).
     running: Mutex<Option<String>>,
+    /// The sandbox folder. Lock it before `running` when both are needed.
+    folder: Mutex<Sandbox>,
     next_id: std::sync::atomic::AtomicU64,
 }
 
@@ -62,17 +70,25 @@ pub fn stop_all(state: &AppState) {
 
 // ---------- events to the window ----------
 
+/// Sent to the Code page as `{ type: "started" | "step" | ..., ...fields }`,
+/// field names in camelCase.
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AgentEvent {
-    Started { task_id: String, folder: String, num_ctx: u32 },
+    Started { task_id: String, folder: String, num_ctx: u32, model: String },
     Step { step: usize },
     Thinking { text: String },
     Content { text: String },
     ToolCall { call_id: String, name: String, summary: String },
+    /// `summary`: "12 lines", "3 matches", "no matches", "8 entries", or the error.
     ToolResult { call_id: String, ok: bool, summary: String },
+    /// A path the sandbox kept out of reach during a tool call.
+    Refused { tool: String, path: String, reason: String },
+    /// After each model step: tokens generated and how fast.
+    Stats { step: usize, tokens: u64, tokens_per_sec: f64 },
     Approval { approval_id: String, call_id: String, edit: PlannedEdit },
-    Resolved { approval_id: String, applied: bool, message: String },
+    /// `approved`: the operator said Apply; `applied`: it was written to disk.
+    Resolved { approval_id: String, approved: bool, applied: bool, message: String },
     Done { status: String, message: String, edits_applied: usize, tokens: u64 },
 }
 
@@ -81,6 +97,7 @@ struct Step {
     thinking: String,
     tool_calls: Vec<Value>,
     tokens: u64,
+    tokens_per_sec: f64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -102,6 +119,7 @@ async fn stream_step(
         "stream": true,
         "options": { "temperature": temperature, "num_predict": max_tokens, "num_ctx": num_ctx },
     });
+    let started = Instant::now();
     let send = http.post(format!("{}/api/chat", ollama::origin(base))).header("content-type", "application/json").body(body.to_string()).send();
     let resp = tokio::select! {
         _ = cancel.notified() => return Ok(None),
@@ -120,9 +138,10 @@ async fn stream_step(
         return Err(llm::friendly_error(model, &raw));
     }
     let mut resp = resp;
-    let mut step = Step { content: String::new(), thinking: String::new(), tool_calls: Vec::new(), tokens: 0 };
+    let mut step = Step { content: String::new(), thinking: String::new(), tool_calls: Vec::new(), tokens: 0, tokens_per_sec: 0.0 };
+    let (mut eval_count, mut eval_ns) = (0, 0);
     let mut buf: Vec<u8> = Vec::new();
-    loop {
+    'read: loop {
         let chunk = tokio::select! {
             _ = cancel.notified() => return Ok(None),
             c = resp.chunk() => c.map_err(|e| format!("The connection to the model server was interrupted: {e}"))?,
@@ -145,11 +164,13 @@ async fn stream_step(
             }
             step.tool_calls.extend(l.tool_calls);
             if l.done {
-                step.tokens = l.eval_count;
-                return Ok(Some(step));
+                (eval_count, eval_ns) = (l.eval_count, l.eval_duration);
+                break 'read;
             }
         }
     }
+    let chars = step.content.len() + step.thinking.len() + step.tool_calls.iter().map(|c| c.to_string().len()).sum::<usize>();
+    (step.tokens, step.tokens_per_sec) = step_stats(eval_count, eval_ns, chars, started.elapsed());
     Ok(Some(step))
 }
 
@@ -160,20 +181,117 @@ async fn stream_step(
 pub struct RunRequest {
     /// Continue this task (same folder), or start a new one when empty.
     task_id: String,
-    folder: String,
     model: String,
     message: String,
 }
 
-fn protected_dirs(app: &tauri::AppHandle, state: &AppState) -> Vec<PathBuf> {
-    let mut out = vec![state.home(), crate::security::ollama_models_dir()];
+/// Democritus's own folders: its home, app data, and where it runs from.
+fn own_dirs(app: &tauri::AppHandle, state: &AppState) -> Vec<PathBuf> {
+    let mut out = vec![state.home()];
     if let Ok(d) = app.path().app_data_dir() {
         out.push(d);
     }
     if let Some(d) = std::env::var_os("DEMOCRITUS_DATA_DIR") {
         out.push(PathBuf::from(d));
     }
+    out.extend(workspace::app_dirs());
     out
+}
+
+/// Other folders the agent may never work in or around.
+fn protected_dirs() -> Vec<PathBuf> {
+    vec![crate::security::ollama_models_dir()]
+}
+
+/// Logs the paths the workspace refused during one tool call and tells the window.
+fn log_refusals(state: &AppState, ws: &Workspace, task_id: &str, tool: &str, on_event: &Channel<AgentEvent>) {
+    for r in ws.take_refusals() {
+        state.log("security", "agent path refused", json!({ "task": task_id, "tool": tool, "path": r.path, "reason": r.reason, "folder": ws.display_root() }));
+        let _ = on_event.send(AgentEvent::Refused { tool: tool.to_string(), path: r.path, reason: r.reason });
+    }
+}
+
+/// agent-folders.json, next to the database.
+fn folders_file(state: &AppState) -> PathBuf {
+    state.data_dir.join(agentfolder::FILE)
+}
+
+/// The sandbox, with the saved folder loaded (and checked again) the first time.
+fn sandbox<'a>(app: &tauri::AppHandle, state: &'a AppState) -> MutexGuard<'a, Sandbox> {
+    let mut sb = state.agent.folder.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(r) = sb.load(&folders_file(state), &own_dirs(app, state), &protected_dirs()) {
+        state.log("security", "agent path refused", json!({ "tool": "load_folder", "path": r.path, "reason": r.reason }));
+    }
+    sb
+}
+
+fn folder_state(app: &tauri::AppHandle, state: &AppState, sb: &Sandbox) -> FolderState {
+    sb.state(&folders_file(state), &own_dirs(app, state), &protected_dirs())
+}
+
+fn is_running(state: &AppState) -> bool {
+    state.agent.running.lock().unwrap_or_else(|p| p.into_inner()).is_some()
+}
+
+/// The sandbox folder, recent folders, and why there is none if so.
+#[tauri::command]
+pub fn agent_folder(app: tauri::AppHandle, state: State<'_, AppState>) -> CmdResult<FolderState> {
+    let sb = sandbox(&app, &state);
+    Ok(folder_state(&app, &state, &sb))
+}
+
+/// Sets the sandbox folder by path (a recent one), or clears it when empty.
+#[tauri::command]
+pub fn agent_set_folder(app: tauri::AppHandle, state: State<'_, AppState>, folder: String) -> CmdResult<FolderState> {
+    set_folder(&app, &state, &folder)
+}
+
+fn set_folder(app: &tauri::AppHandle, state: &AppState, folder: &str) -> CmdResult<FolderState> {
+    let mut sb = sandbox(app, state);
+    if is_running(state) {
+        return Err(STOP_FIRST.into());
+    }
+    let file = folders_file(state);
+    if folder.trim().trim_matches('"').is_empty() {
+        sb.clear(&file);
+        state.log("agent", "sandbox folder cleared", json!({}));
+    } else {
+        match sb.set(&file, folder, &own_dirs(app, state), &protected_dirs()) {
+            Ok(shown) => state.log("agent", "sandbox folder set", json!({ "folder": shown })),
+            Err(e) => {
+                state.log("security", "agent path refused", json!({ "tool": "set_folder", "path": folder, "reason": e }));
+                return Err(e);
+            }
+        }
+    }
+    Ok(folder_state(app, state, &sb))
+}
+
+/// Opens the native folder picker. None if the operator cancelled.
+#[tauri::command]
+pub async fn agent_pick_folder(app: tauri::AppHandle, state: State<'_, AppState>) -> CmdResult<Option<FolderState>> {
+    use tauri_plugin_dialog::DialogExt;
+    if is_running(&state) {
+        return Err(STOP_FIRST.into());
+    }
+    let current = sandbox(&app, &state).folder();
+    let mut dialog = app.dialog().file().set_title("Pick the project folder for the coding agent");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    if let Some(dir) = current {
+        dialog = dialog.set_directory(dir);
+    }
+    // The picker runs on the UI thread; this command just waits for the answer.
+    let (tx, rx) = oneshot::channel();
+    dialog.pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(picked) = rx.await.map_err(|_| "The folder picker closed unexpectedly.".to_string())? else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| format!("Can't use the picked folder: {e}"))?;
+    set_folder(&app, &state, &path.display().to_string()).map(Some)
 }
 
 #[tauri::command]
@@ -192,16 +310,27 @@ pub async fn agent_run(app: tauri::AppHandle, state: State<'_, AppState>, req: R
     if !ollama::is_ollama(&state.http, &settings.base_url).await {
         return Err("The coding agent needs Ollama (it uses Ollama's tool calling).".into());
     }
-    let ws = Workspace::open(&req.folder, &protected_dirs(&app, &state))?;
-    {
+    // Only the folder the backend holds, checked again now.
+    let (ws, task_id) = {
+        let mut sb = sandbox(&app, &state);
         let mut running = state.agent.running.lock().unwrap_or_else(|p| p.into_inner());
         if running.is_some() {
             return Err("The coding agent is already working on a task. Stop it first.".into());
         }
+        let before = sb.folder();
+        let ws = match sb.open(&own_dirs(&app, &state), &protected_dirs()) {
+            Ok(ws) => ws,
+            Err(e) => {
+                if let Some(path) = before {
+                    state.log("security", "agent path refused", json!({ "tool": "open_folder", "path": path, "reason": e }));
+                }
+                return Err(e);
+            }
+        };
         let id = if req.task_id.is_empty() { state.agent.new_id("task") } else { req.task_id.clone() };
-        *running = Some(id);
-    }
-    let task_id = state.agent.running.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_default();
+        *running = Some(id.clone());
+        (ws, id)
+    };
     let result = run(&state, &ws, &task_id, &req, &on_event).await;
     *state.agent.running.lock().unwrap_or_else(|p| p.into_inner()) = None;
     state.active.lock().unwrap_or_else(|p| p.into_inner()).remove(&task_id);
@@ -218,7 +347,7 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
     let limit = ollama::context_limit(&state.http, &base, &req.model).await.unwrap_or(u32::MAX);
     let num_ctx = settings.agent_context_tokens.min(limit).max(4096);
     let cancel = state.cancel_handle(task_id);
-    let folder = ws.root().display().to_string();
+    let folder = ws.display_root();
 
     // A follow-up continues the same conversation if the folder is unchanged.
     let mut messages = {
@@ -231,7 +360,7 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
     });
     messages.push(json!({ "role": "user", "content": req.message }));
     state.log("agent", "coding task started", json!({ "task": task_id, "folder": folder, "model": req.model, "request": req.message.chars().take(300).collect::<String>() }));
-    let _ = on_event.send(AgentEvent::Started { task_id: task_id.to_string(), folder: folder.clone(), num_ctx });
+    let _ = on_event.send(AgentEvent::Started { task_id: task_id.to_string(), folder: folder.clone(), num_ctx, model: req.model.clone() });
 
     let backups = home::backups_dir(&state.home()).join("agent").join(task_id);
     let reply_room = (settings.max_tokens as usize).min(num_ctx as usize / 2);
@@ -253,6 +382,7 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
             return finish(state, task_id, on_event, &messages, save, "stopped", "Stopped.", edits_applied, tokens);
         };
         tokens += step.tokens;
+        let _ = on_event.send(AgentEvent::Stats { step: step_no, tokens: step.tokens, tokens_per_sec: step.tokens_per_sec });
         let calls: Vec<ToolCall> = step.tool_calls.iter().filter_map(parse_tool_call).collect();
         let mut assistant = json!({ "role": "assistant", "content": step.content });
         if !step.tool_calls.is_empty() {
@@ -266,23 +396,26 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
             let call_id = state.agent.new_id("call");
             let summary = summarize(&call);
             let _ = on_event.send(AgentEvent::ToolCall { call_id: call_id.clone(), name: call.name.clone(), summary: summary.clone() });
-            let result = match run_tool(ws, &call) {
+            let outcome = run_tool(ws, &call);
+            log_refusals(state, ws, task_id, &call.name, on_event);
+            let result = match outcome {
                 Err(e) => {
                     let _ = on_event.send(AgentEvent::ToolResult { call_id: call_id.clone(), ok: false, summary: e.clone() });
                     format!("Error: {e}")
                 }
                 Ok(ToolOutcome::Text(t)) => {
                     state.log("agent", &summary, json!({ "task": task_id }));
-                    let lines = t.lines().count().saturating_sub(1);
-                    let _ = on_event.send(AgentEvent::ToolResult { call_id: call_id.clone(), ok: true, summary: format!("{lines} line{}", if lines == 1 { "" } else { "s" }) });
+                    let _ = on_event.send(AgentEvent::ToolResult { call_id: call_id.clone(), ok: true, summary: result_summary(&call.name, &t) });
                     t
                 }
                 Ok(ToolOutcome::Edit(edit)) => {
-                    let Some((approved, note)) = ask(state, &call_id, &edit, &cancel, on_event).await else {
+                    let Some((approval_id, approved, note)) = ask(state, &call_id, &edit, &cancel, on_event).await else {
                         return finish(state, task_id, on_event, &messages, save, "stopped", "Stopped while an edit was waiting.", edits_applied, tokens);
                     };
                     let (text, applied, message) = if approved {
-                        match ws.apply(&edit, &backups) {
+                        let applied = ws.apply(&edit, &backups);
+                        log_refusals(state, ws, task_id, &call.name, on_event);
+                        match applied {
                             Ok(backup) => {
                                 edits_applied += 1;
                                 let where_ = backup.map(|b| format!(" Backup of the old version: {}", b.display())).unwrap_or_default();
@@ -299,6 +432,7 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
                         let why = if note.trim().is_empty() { String::new() } else { format!(" Their note: {}", note.trim()) };
                         (format!("The operator rejected this change to {}; nothing was written.{why}", edit.path), false, "Rejected.".into())
                     };
+                    let _ = on_event.send(AgentEvent::Resolved { approval_id, approved, applied, message: message.clone() });
                     let _ = on_event.send(AgentEvent::ToolResult { call_id: call_id.clone(), ok: applied, summary: message });
                     text
                 }
@@ -311,8 +445,10 @@ async fn run(state: &AppState, ws: &Workspace, task_id: &str, req: &RunRequest, 
     finish(state, task_id, on_event, &messages, save, "limit", msg, edits_applied, tokens)
 }
 
-/// Sends the edit to the window and waits for Apply/Reject. None if stopped.
-async fn ask(state: &AppState, call_id: &str, edit: &PlannedEdit, cancel: &Notify, on_event: &Channel<AgentEvent>) -> Option<(bool, String)> {
+/// Sends the edit to the window and waits for Apply/Reject: (approval id,
+/// approved, note). None if stopped; the window is told so here, otherwise
+/// the caller sends Resolved once the edit is written (or not).
+async fn ask(state: &AppState, call_id: &str, edit: &PlannedEdit, cancel: &Notify, on_event: &Channel<AgentEvent>) -> Option<(String, bool, String)> {
     let approval_id = state.agent.new_id("edit");
     let (tx, rx) = oneshot::channel();
     state.agent.approvals.lock().unwrap_or_else(|p| p.into_inner()).insert(approval_id.clone(), tx);
@@ -323,12 +459,10 @@ async fn ask(state: &AppState, call_id: &str, edit: &PlannedEdit, cancel: &Notif
         r = rx => r.ok(),
     };
     state.agent.approvals.lock().unwrap_or_else(|p| p.into_inner()).remove(&approval_id);
-    let _ = on_event.send(AgentEvent::Resolved {
-        approval_id,
-        applied: answer.as_ref().is_some_and(|a| a.0),
-        message: if answer.is_none() { "Stopped.".into() } else { String::new() },
-    });
-    answer
+    if answer.is_none() {
+        let _ = on_event.send(AgentEvent::Resolved { approval_id: approval_id.clone(), approved: false, applied: false, message: "Stopped.".into() });
+    }
+    answer.map(|(approved, note)| (approval_id, approved, note))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -370,4 +504,71 @@ pub fn agent_stop(state: State<AppState>) {
 #[tauri::command]
 pub fn agent_forget(state: State<AppState>, task_id: String) {
     state.agent.tasks.lock().unwrap_or_else(|p| p.into_inner()).remove(&task_id);
+}
+
+/// Saves the Code page's activity log as a text file in Democritus's logs
+/// folder. The backend picks the name. Returns the file's full path.
+#[tauri::command]
+pub fn agent_save_log(state: State<AppState>, text: String) -> CmdResult<String> {
+    let path = save_log(&home::logs_dir(&state.home()), &localtime::now().stamp(), &text)?;
+    let shown = workspace::display_path(&path);
+    state.log("agent", "activity log saved", json!({ "path": shown }));
+    Ok(shown)
+}
+
+/// Writes `agent-activity-<stamp>.txt` in `dir`, never over an existing file.
+fn save_log(dir: &Path, stamp: &str, text: &str) -> Result<PathBuf, String> {
+    if text.len() > MAX_SAVED_LOG {
+        return Err("The activity log is over 5 MB, too big to save.".into());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("Can't create {}: {e}", dir.display()))?;
+    let mut path = dir.join(format!("agent-activity-{stamp}.txt"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("agent-activity-{stamp}-{n}.txt"));
+        n += 1;
+    }
+    std::fs::write(&path, text).map_err(|e| format!("Can't save the activity log: {e}"))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activity_log_is_saved_under_a_backend_name() {
+        let dir = crate::db::test_dir("agent-log");
+        let logs = dir.join("logs");
+        let a = save_log(&logs, "20261017-120000", "step 1\n").unwrap();
+        assert_eq!(a, logs.join("agent-activity-20261017-120000.txt"));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "step 1\n");
+        let b = save_log(&logs, "20261017-120000", "again\n").unwrap();
+        assert_eq!(b, logs.join("agent-activity-20261017-120000-2.txt"), "never overwrites");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "step 1\n");
+        let big = "x".repeat(MAX_SAVED_LOG + 1);
+        assert!(save_log(&logs, "20261017-120001", &big).unwrap_err().contains("5 MB"));
+        assert!(!logs.join("agent-activity-20261017-120001.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn events_reach_the_window_in_camel_case() {
+        let v = |e: AgentEvent| serde_json::to_value(e).unwrap();
+        assert_eq!(
+            v(AgentEvent::Started { task_id: "t".into(), folder: "D:\\p".into(), num_ctx: 8192, model: "qwen3-coder".into() }),
+            json!({ "type": "started", "taskId": "t", "folder": "D:\\p", "numCtx": 8192, "model": "qwen3-coder" })
+        );
+        assert_eq!(
+            v(AgentEvent::Refused { tool: "read_file".into(), path: "../x".into(), reason: "outside".into() }),
+            json!({ "type": "refused", "tool": "read_file", "path": "../x", "reason": "outside" })
+        );
+        assert_eq!(v(AgentEvent::Stats { step: 2, tokens: 40, tokens_per_sec: 12.5 }), json!({ "type": "stats", "step": 2, "tokens": 40, "tokensPerSec": 12.5 }));
+        assert_eq!(
+            v(AgentEvent::Resolved { approval_id: "e".into(), approved: true, applied: false, message: "disk full".into() }),
+            json!({ "type": "resolved", "approvalId": "e", "approved": true, "applied": false, "message": "disk full" })
+        );
+        let fs: FolderState = FolderState { folder: None, error: Some(agentfolder::PICK_FIRST.into()), recent: vec![] };
+        assert_eq!(serde_json::to_value(fs).unwrap(), json!({ "folder": null, "error": "Pick a folder first.", "recent": [] }));
+    }
 }

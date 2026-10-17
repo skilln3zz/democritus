@@ -114,6 +114,31 @@ pub fn summarize(call: &ToolCall) -> String {
     }
 }
 
+/// The window's one-line result for a read-only tool: lines read, matches
+/// found or entries listed. `text` is what the tool returned to the model.
+pub fn result_summary(tool: &str, text: &str) -> String {
+    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    // The first line is a header; a trailing "… (" line is a note.
+    let body = |cut: &str| text.split_once('\n').map_or("", |(_, b)| b).split(cut).next().unwrap_or("").to_string();
+    match tool {
+        "read_file" => plural(body("\n… (cut at").lines().count(), "line", "lines"),
+        "search_files" if text.starts_with("No matches") => "no matches".into(),
+        "search_files" => plural(body("\n… (stopped").lines().filter(|l| !l.is_empty()).count(), "match", "matches"),
+        "list_files" => plural(body("\n… (stopped").lines().filter(|l| !l.is_empty() && *l != "(empty)").count(), "entry", "entries"),
+        _ => plural(text.lines().count(), "line", "lines"),
+    }
+}
+
+/// Tokens generated in one model step and how fast. Uses Ollama's
+/// eval_count/eval_duration (ns) when present, otherwise estimates the tokens
+/// from the characters received and times them by the step's wall clock.
+pub fn step_stats(eval_count: u64, eval_duration_ns: u64, chars: usize, elapsed: std::time::Duration) -> (u64, f64) {
+    let tokens = if eval_count > 0 { eval_count } else { chars.div_ceil(3) as u64 };
+    let secs = if eval_count > 0 && eval_duration_ns > 0 { eval_duration_ns as f64 / 1e9 } else { elapsed.as_secs_f64() };
+    let per_sec = if secs > 0.0 { tokens as f64 / secs } else { 0.0 };
+    (tokens, (per_sec * 10.0).round() / 10.0)
+}
+
 fn msg_chars(m: &Value) -> usize {
     m["content"].as_str().map_or(0, str::len) + m.get("tool_calls").map_or(0, |t| t.to_string().len())
 }
@@ -146,6 +171,8 @@ pub struct StepLine {
     pub tool_calls: Vec<Value>,
     pub done: bool,
     pub eval_count: u64,
+    /// Nanoseconds spent generating, on the final line.
+    pub eval_duration: u64,
     pub error: Option<String>,
 }
 
@@ -162,6 +189,7 @@ pub fn parse_step_line(line: &str) -> Option<StepLine> {
         tool_calls: m["tool_calls"].as_array().cloned().unwrap_or_default(),
         done: v["done"].as_bool() == Some(true),
         eval_count: v["eval_count"].as_u64().unwrap_or(0),
+        eval_duration: v["eval_duration"].as_u64().unwrap_or(0),
         error: None,
     })
 }
@@ -180,8 +208,8 @@ mod tests {
         assert_eq!(parse_tool_call(&s).unwrap().args, json!({ "path": "src" }));
         let bad = json!({ "function": { "name": "list_files", "arguments": "not json" } });
         assert_eq!(parse_tool_call(&bad).unwrap().args, json!({}));
-        let done = parse_step_line(r#"{"message":{"role":"assistant","content":"ok"},"done":true,"eval_count":42}"#).unwrap();
-        assert!(done.done && done.content == "ok" && done.eval_count == 42);
+        let done = parse_step_line(r#"{"message":{"role":"assistant","content":"ok"},"done":true,"eval_count":42,"eval_duration":2100000000}"#).unwrap();
+        assert!(done.done && done.content == "ok" && done.eval_count == 42 && done.eval_duration == 2_100_000_000);
         assert_eq!(parse_step_line(r#"{"error":"boom"}"#).unwrap().error.as_deref(), Some("boom"));
         assert!(parse_step_line("").is_none());
     }
@@ -190,7 +218,7 @@ mod tests {
     fn tools_run_and_edits_only_plan() {
         let dir = crate::db::test_dir("agent-tools");
         std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
-        let ws = Workspace::open(dir.to_str().unwrap(), &[]).unwrap();
+        let ws = Workspace::open(dir.to_str().unwrap(), &[], &[]).unwrap();
         let call = |name: &str, args: Value| ToolCall { name: name.into(), args };
         assert!(matches!(run_tool(&ws, &call("read_file", json!({ "path": "a.txt" }))), Ok(ToolOutcome::Text(t)) if t.contains("two")));
         assert!(matches!(run_tool(&ws, &call("read_file", json!({ "path": "a.txt", "start_line": "2" }))), Ok(ToolOutcome::Text(t)) if !t.contains("one\n")));
@@ -202,6 +230,42 @@ mod tests {
         assert_eq!(summarize(&call("read_file", json!({ "path": "a.txt", "start_line": 3 }))), "Read a.txt, lines 3-end");
         assert_eq!(summarize(&call("search_files", json!({ "query": "fn" }))), "Search “fn” in .");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_results_are_summarized_per_tool() {
+        let dir = crate::db::test_dir("agent-summary");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(dir.join("src/b.txt"), "Two\n").unwrap();
+        std::fs::create_dir_all(dir.join("empty")).unwrap();
+        let ws = Workspace::open(dir.to_str().unwrap(), &[], &[]).unwrap();
+        let text = |name: &str, args: Value| match run_tool(&ws, &ToolCall { name: name.into(), args }) {
+            Ok(ToolOutcome::Text(t)) => result_summary(name, &t),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(text("read_file", json!({ "path": "a.txt" })), "3 lines");
+        assert_eq!(text("read_file", json!({ "path": "a.txt", "start_line": 2, "end_line": 2 })), "1 line");
+        assert_eq!(text("search_files", json!({ "query": "two" })), "2 matches");
+        assert_eq!(text("search_files", json!({ "query": "three" })), "1 match");
+        assert_eq!(text("search_files", json!({ "query": "zzz" })), "no matches");
+        assert_eq!(text("list_files", json!({ "depth": 1 })), "3 entries");
+        assert_eq!(text("list_files", json!({ "path": "src" })), "1 entry");
+        assert_eq!(text("list_files", json!({ "path": "empty" })), "0 entries");
+        let long: String = (0..30_000).map(|i| format!("{i}\n")).collect();
+        std::fs::write(dir.join("long.txt"), long).unwrap();
+        let cut = text("read_file", json!({ "path": "long.txt" }));
+        assert!(cut.ends_with(" lines") && cut != "30000 lines", "the cut note is not a line: {cut}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn step_speed_prefers_ollama_timing() {
+        let wall = std::time::Duration::from_secs(4);
+        assert_eq!(step_stats(42, 2_100_000_000, 999, wall), (42, 20.0));
+        assert_eq!(step_stats(0, 0, 300, wall), (100, 25.0), "estimated from characters and wall time");
+        assert_eq!(step_stats(10, 0, 0, wall), (10, 2.5));
+        assert_eq!(step_stats(0, 0, 0, std::time::Duration::ZERO), (0, 0.0));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! the exact before/after text.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -16,9 +17,20 @@ const MAX_LIST: usize = 400;
 const MAX_HITS: usize = 60;
 const MAX_SEARCH_FILE: u64 = 1_000_000;
 
+const ITSELF: &str = "The agent can't work on Democritus itself. Pick a project folder instead.";
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
+    /// Paths refused since the last take_refusals, for the activity log.
+    refused: Arc<Mutex<Vec<Refusal>>>,
+}
+
+/// A path the model asked for that was kept out of reach, and why.
+#[derive(Debug, Clone, Serialize)]
+pub struct Refusal {
+    pub path: String,
+    pub reason: String,
 }
 
 /// A change waiting for the operator: the exact text before and after.
@@ -33,12 +45,19 @@ pub struct PlannedEdit {
 }
 
 impl Workspace {
-    /// Opens `folder` as a workspace. `protected` are folders the agent may
-    /// never work in or around (the Democritus home, app data, model stores).
-    pub fn open(folder: &str, protected: &[PathBuf]) -> Result<Self, String> {
+    /// Opens `folder` as a workspace. `own` are Democritus's own folders (its
+    /// home, app data, and where it runs from); `protected` are other folders
+    /// the agent may never work in or around (model stores). Both are checked
+    /// even if they don't exist yet.
+    pub fn open(folder: &str, own: &[PathBuf], protected: &[PathBuf]) -> Result<Self, String> {
         let folder = folder.trim().trim_matches('"');
         if folder.is_empty() {
-            return Err("Pick a project folder first.".into());
+            return Err("Pick a folder first.".into());
+        }
+        // A relative path would be resolved against wherever the app was
+        // started from, which the operator can't see.
+        if !Path::new(folder).is_absolute() {
+            return Err("Use the folder's full path, for example D:\\projects\\my-app.".into());
         }
         let root = std::fs::canonicalize(folder).map_err(|e| format!("Can't open the folder \"{folder}\": {e}"))?;
         if !root.is_dir() {
@@ -52,17 +71,37 @@ impl Workspace {
                 return Err("Your whole user folder can't be a project folder. Pick the project's own folder.".into());
             }
         }
-        for p in protected {
-            let Ok(p) = std::fs::canonicalize(p) else { continue };
-            if root.starts_with(&p) || p.starts_with(&root) {
-                return Err(format!("{} holds Democritus's own data or model files, so the coding agent can't work there.", root.display()));
-            }
+        let overlaps = |p: &PathBuf| {
+            let p = canon_lossy(p);
+            root.starts_with(&p) || p.starts_with(&root)
+        };
+        if own.iter().any(overlaps) {
+            return Err(ITSELF.into());
         }
-        Ok(Self { root })
+        if protected.iter().any(overlaps) {
+            return Err(format!("{} holds Democritus's own data or model files, so the coding agent can't work there.", display_path(&root)));
+        }
+        Ok(Self { root, refused: Arc::default() })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The root as the operator would type it (no \\?\ prefix).
+    pub fn display_root(&self) -> String {
+        display_path(&self.root)
+    }
+
+    /// The paths refused since the last call.
+    pub fn take_refusals(&self) -> Vec<Refusal> {
+        std::mem::take(&mut *self.refused.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    /// Records a refused path and returns the reason as the error.
+    fn refuse(&self, path: &str, reason: String) -> String {
+        self.refused.lock().unwrap_or_else(|p| p.into_inner()).push(Refusal { path: path.to_string(), reason: reason.clone() });
+        reason
     }
 
     /// Resolves a model-supplied relative path to a real path inside the root.
@@ -73,21 +112,30 @@ impl Workspace {
         let rel = if rel.is_empty() || rel == "." || rel == "/" { "." } else { rel };
         let p = Path::new(rel);
         if p.is_absolute() || rel.starts_with('/') || rel.starts_with('\\') || p.components().any(|c| matches!(c, Component::Prefix(_) | Component::RootDir)) {
-            return Err(format!("\"{rel}\" is an absolute path. Use a path relative to the project folder."));
+            return Err(self.refuse(rel, format!("\"{rel}\" is an absolute path. Use a path relative to the project folder.")));
         }
         if p.components().any(|c| c == Component::ParentDir) {
-            return Err(format!("\"{rel}\" leaves the project folder (\"..\" is not allowed)."));
+            return Err(self.refuse(rel, format!("\"{rel}\" leaves the project folder (\"..\" is not allowed).")));
         }
         let joined = self.root.join(p);
         // Walk up to the nearest existing ancestor and make sure symlinks
-        // don't lead outside the root.
+        // don't lead outside the root. A broken link counts as existing.
         let mut existing = joined.as_path();
-        while !existing.exists() {
-            existing = existing.parent().ok_or_else(|| format!("\"{rel}\" is not inside the project folder."))?;
+        while std::fs::symlink_metadata(existing).is_err() {
+            match existing.parent() {
+                Some(parent) => existing = parent,
+                None => return Err(self.refuse(rel, format!("\"{rel}\" is not inside the project folder."))),
+            }
         }
-        let real = std::fs::canonicalize(existing).map_err(|e| format!("Can't resolve \"{rel}\": {e}"))?;
+        let real = match std::fs::canonicalize(existing) {
+            Ok(real) => real,
+            Err(_) if std::fs::symlink_metadata(existing).is_ok_and(|m| m.file_type().is_symlink()) => {
+                return Err(self.refuse(rel, format!("\"{rel}\" is a broken link or points outside the project folder.")));
+            }
+            Err(e) => return Err(format!("Can't resolve \"{rel}\": {e}")),
+        };
         if !real.starts_with(&self.root) {
-            return Err(format!("\"{rel}\" points outside the project folder."));
+            return Err(self.refuse(rel, format!("\"{rel}\" points outside the project folder.")));
         }
         let rest = joined.strip_prefix(existing).unwrap_or(Path::new(""));
         // join("") would add a trailing separator, turning a file into "file/".
@@ -125,7 +173,11 @@ impl Workspace {
 
     fn walk_list(&self, dir: &Path, level: usize, depth: usize, out: &mut Vec<String>, truncated: &mut bool) {
         let mut entries: Vec<(bool, String, PathBuf)> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd.flatten().map(|e| (e.path().is_dir(), e.file_name().to_string_lossy().to_string(), e.path())).collect(),
+            Ok(rd) => rd
+                .flatten()
+                .filter(|e| self.walkable(e))
+                .map(|e| (e.path().is_dir(), e.file_name().to_string_lossy().to_string(), e.path()))
+                .collect(),
             Err(_) => return,
         };
         entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
@@ -195,7 +247,7 @@ impl Workspace {
         }
         if path.is_dir() {
             let Ok(rd) = std::fs::read_dir(path) else { return };
-            let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            let mut entries: Vec<PathBuf> = rd.flatten().filter(|e| self.walkable(e)).map(|e| e.path()).collect();
             entries.sort();
             for p in entries {
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -218,6 +270,24 @@ impl Workspace {
                 if hits.len() >= MAX_HITS {
                     return;
                 }
+            }
+        }
+    }
+
+    /// Whether list/search may walk into or read a folder entry: a symlink or
+    /// junction must resolve inside the root. Refused entries are recorded.
+    fn walkable(&self, entry: &std::fs::DirEntry) -> bool {
+        if entry.file_type().is_ok_and(|t| !t.is_symlink()) {
+            return true;
+        }
+        let path = entry.path();
+        match std::fs::canonicalize(&path) {
+            // A link back to a folder above it would be walked forever.
+            Ok(real) if real.starts_with(&self.root) => !path.starts_with(&real),
+            _ => {
+                let rel = self.rel(&path);
+                self.refuse(&rel, format!("\"{rel}\" points outside the project folder."));
+                false
             }
         }
     }
@@ -266,10 +336,10 @@ impl Workspace {
         let path = self.resolve(rel)?;
         let r = self.rel(&path);
         if r == "." {
-            return Err("That's the project folder itself, not a file.".into());
+            return Err(self.refuse(rel, "That's the project folder itself, not a file.".into()));
         }
         if r.split('/').any(|part| part == ".git") {
-            return Err("Files inside .git can't be changed by the coding agent.".into());
+            return Err(self.refuse(rel, "Files inside .git can't be changed by the coding agent.".into()));
         }
         Ok(path)
     }
@@ -313,6 +383,57 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).and_then(|h| std::fs::canonicalize(h).ok())
 }
 
+/// The folders Democritus runs from: the program's folder and, in a dev
+/// build, the source folder it was built from.
+pub fn app_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.to_path_buf());
+        }
+        if let Some(src) = exe.ancestors().skip(1).find(|a| a.join("src-tauri").join("tauri.conf.json").is_file()) {
+            out.push(src.to_path_buf());
+        }
+    }
+    #[cfg(debug_assertions)]
+    if let Some(src) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+        out.push(src.to_path_buf());
+    }
+    out.dedup();
+    out
+}
+
+/// Canonical form of `p` even if it doesn't exist yet: the nearest existing
+/// ancestor is canonicalized and the rest appended.
+fn canon_lossy(p: &Path) -> PathBuf {
+    let mut existing = p;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return rest.iter().rev().fold(real, |acc, name| acc.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
+/// A path as the operator would type it: no Windows \\?\ prefix.
+pub fn display_path(p: &Path) -> String {
+    let s = p.display().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s
+    }
+}
+
 /// Reads a file as UTF-8 text; binary files are refused.
 fn read_text(path: &Path) -> Result<String, String> {
     if path.is_dir() {
@@ -350,7 +471,7 @@ mod tests {
         std::fs::write(proj.join("node_modules/x/index.js"), "hello").unwrap();
         std::fs::write(proj.join("logo.png"), [0u8, 1, 2, 0, 5]).unwrap();
         std::fs::write(dir.join("secret.txt"), "outside").unwrap();
-        let ws = Workspace::open(proj.to_str().unwrap(), &[]).unwrap();
+        let ws = Workspace::open(proj.to_str().unwrap(), &[], &[]).unwrap();
         (dir, ws)
     }
 
@@ -378,11 +499,11 @@ mod tests {
         let dir = crate::db::test_dir("ws-protected");
         let home = dir.join("Democritus");
         std::fs::create_dir_all(home.join("memory")).unwrap();
-        assert!(Workspace::open(dir.to_str().unwrap(), &[home.clone()]).is_err(), "contains the home folder");
-        assert!(Workspace::open(home.join("memory").to_str().unwrap(), &[home.clone()]).is_err(), "inside the home folder");
-        assert!(Workspace::open("/", &[]).is_err());
-        assert!(Workspace::open("", &[]).is_err());
-        assert!(Workspace::open(dir.join("missing").to_str().unwrap(), &[]).is_err());
+        assert!(Workspace::open(dir.to_str().unwrap(), &[], &[home.clone()]).unwrap_err().contains("model files"), "contains a protected folder");
+        assert!(Workspace::open(home.join("memory").to_str().unwrap(), &[], &[home.clone()]).is_err(), "inside a protected folder");
+        assert!(Workspace::open("/", &[], &[]).is_err());
+        assert!(Workspace::open("", &[], &[]).is_err());
+        assert!(Workspace::open(dir.join("missing").to_str().unwrap(), &[], &[]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -477,12 +598,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Known gap (review 2026-10-17): list_files and search_files walk into a
-    /// junction or symlink inside the project and read what lies outside it.
-    /// Un-ignore once the walk skips links that resolve outside the root.
+    /// list_files and search_files must not walk into a junction or symlink
+    /// inside the project that leads outside it (review 2026-10-17).
     #[cfg(windows)]
     #[test]
-    #[ignore = "known gap: list/search follow junctions out of the project"]
     fn list_and_search_do_not_follow_junctions_out() {
         let (dir, ws) = setup("ws-walk");
         let outside = dir.join("outside");
@@ -537,5 +656,158 @@ mod tests {
         let e = ws.plan_edit("win.txt", "a\nb", "a\nB").unwrap();
         assert_eq!(e.after, "a\r\nB\r\nc\r\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+        assert!(made.status.success(), "mklink /J failed: {made:?}");
+    }
+
+    #[test]
+    fn chosen_folder_is_respected() {
+        let (dir, ws) = setup("ws-chosen");
+        assert_eq!(ws.root(), std::fs::canonicalize(dir.join("proj")).unwrap());
+        assert!(ws.read("README.md", None, None).unwrap().contains("Hello world"));
+        assert!(ws.list(".", 2).unwrap().contains("main.rs"));
+        assert!(ws.search("hello", ".").unwrap().contains("README.md:2"));
+        assert!(ws.take_refusals().is_empty());
+        // "Not found" is an ordinary error, not a refusal.
+        assert!(ws.read("missing.txt", None, None).is_err());
+        assert!(ws.take_refusals().is_empty());
+        // A file in another folder, by its full path.
+        let secret = dir.join("secret.txt");
+        let secret = secret.to_str().unwrap();
+        assert!(ws.read(secret, None, None).is_err());
+        let refused = ws.take_refusals();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].path, secret);
+        assert!(refused[0].reason.contains("absolute path"), "{refused:?}");
+        assert!(ws.take_refusals().is_empty(), "refusals are taken once");
+        // Relative folders are never resolved against the working directory.
+        let mut relative = vec![".", "proj", "..", "src-tauri"];
+        if cfg!(windows) {
+            relative.extend(["D:", "C:proj", "\\proj"]);
+        }
+        for f in relative {
+            let e = Workspace::open(f, &[], &[]).unwrap_err();
+            assert_eq!(e, "Use the folder's full path, for example D:\\projects\\my-app.", "{f}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paths_in_the_app_folder_are_refused() {
+        let dir = crate::db::test_dir("ws-own");
+        let app = dir.join("democritus-app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(app.join("src/main.ts"), "app code\n").unwrap();
+        std::fs::create_dir_all(dir.join("democritus-app2")).unwrap();
+        std::fs::create_dir_all(dir.join("proj")).unwrap();
+        let own = [app.clone()];
+        for f in [app.clone(), app.join("src"), dir.clone()] {
+            assert_eq!(Workspace::open(f.to_str().unwrap(), &own, &[]).unwrap_err(), ITSELF, "{}", f.display());
+        }
+        // A neighbour whose name merely starts the same is fine.
+        assert!(Workspace::open(dir.join("democritus-app2").to_str().unwrap(), &own, &[]).is_ok());
+        let ws = Workspace::open(dir.join("proj").to_str().unwrap(), &own, &[]).unwrap();
+        let target = app.join("src").join("main.ts");
+        assert!(ws.read(target.to_str().unwrap(), None, None).is_err());
+        assert!(ws.plan_write(target.to_str().unwrap(), "x").is_err());
+        assert_eq!(ws.take_refusals().len(), 2);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "app code\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_real_app_folder_is_refused() {
+        let own = app_dirs();
+        assert!(!own.is_empty());
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = manifest.parent().unwrap();
+        for f in [source.to_path_buf(), source.join("src"), manifest.to_path_buf()] {
+            assert_eq!(Workspace::open(f.to_str().unwrap(), &own, &[]).unwrap_err(), ITSELF, "{}", f.display());
+        }
+    }
+
+    #[test]
+    fn democritus_home_cannot_be_picked() {
+        let dir = crate::db::test_dir("ws-home");
+        let home = dir.join("Democritus");
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        let own = [home.clone()];
+        for f in [home.clone(), home.join("memory"), dir.clone()] {
+            assert_eq!(Workspace::open(f.to_str().unwrap(), &own, &[]).unwrap_err(), ITSELF, "{}", f.display());
+        }
+        // A home that doesn't exist yet still protects where it will be.
+        let later = dir.join("later");
+        std::fs::create_dir_all(&later).unwrap();
+        assert_eq!(Workspace::open(later.to_str().unwrap(), &[later.join("Democritus").join("data")], &[]).unwrap_err(), ITSELF);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_folder_means_agent_off() {
+        for f in ["", "   ", "\"\"", " \"\" "] {
+            assert_eq!(Workspace::open(f, &[], &[]).unwrap_err(), "Pick a folder first.", "{f:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_into_the_app_folder_is_refused() {
+        let dir = crate::db::test_dir("ws-own-link");
+        let app = dir.join("democritus-app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(app.join("src/main.ts"), "appsecret\n").unwrap();
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("README.md"), "hello\n").unwrap();
+        let own = [app.clone()];
+        // A junction outside the project that leads to the app folder.
+        let outer = dir.join("shortcut");
+        junction(&outer, &app);
+        assert_eq!(Workspace::open(outer.to_str().unwrap(), &own, &[]).unwrap_err(), ITSELF);
+        // A junction inside the project that leads to the app folder.
+        let inner = proj.join("link");
+        junction(&inner, &app);
+        let ws = Workspace::open(proj.to_str().unwrap(), &own, &[]).unwrap();
+        let read = ws.read("link/src/main.ts", None, None);
+        let write = ws.plan_write("link/src/main.ts", "x");
+        let listed = ws.list(".", 4).unwrap();
+        let found = ws.search("appsecret", ".").unwrap();
+        let refused = ws.take_refusals();
+        let _ = std::fs::remove_dir(&outer);
+        let _ = std::fs::remove_dir(&inner);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(read.unwrap_err().contains("outside"));
+        assert!(write.is_err());
+        assert!(listed.contains("README.md") && !listed.contains("main.ts") && !listed.contains("link"), "{listed}");
+        assert!(found.starts_with("No matches"), "{found}");
+        let paths: Vec<&str> = refused.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["link/src/main.ts", "link/src/main.ts", "link", "link"], "{refused:?}");
+        assert!(refused.iter().all(|r| r.reason.contains("outside")), "{refused:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broken_links_are_refused() {
+        let (dir, ws) = setup("ws-dangling");
+        let gone = dir.join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        let link = dir.join("proj").join("dead");
+        junction(&link, &gone);
+        std::fs::remove_dir(&gone).unwrap();
+        let into = ws.plan_write("dead/new.txt", "x");
+        let onto = ws.plan_write("dead", "x");
+        let listed = ws.list(".", 2).unwrap();
+        let refused = ws.take_refusals();
+        let _ = std::fs::remove_dir(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(into.unwrap_err().contains("broken link"));
+        assert!(onto.unwrap_err().contains("broken link"));
+        assert!(!listed.contains("dead"), "{listed}");
+        assert!(!gone.exists(), "nothing was created through the link");
+        assert_eq!(refused.len(), 3, "{refused:?}");
     }
 }

@@ -4,6 +4,7 @@
 mod activity;
 mod agent;
 mod agentcore;
+mod agentfolder;
 mod build;
 mod buildcore;
 mod context;
@@ -49,6 +50,8 @@ pub struct AppState {
     /// Cancellation handles for in-flight generations, keyed by request id.
     active: Mutex<HashMap<String, Arc<Notify>>>,
     home: Mutex<PathBuf>,
+    /// Where democritus.db lives (app data, or DEMOCRITUS_DATA_DIR in tests).
+    data_dir: PathBuf,
     activity: activity::ActivityLog,
     approvals: operator::Approvals,
     /// Notified by Lockdown to abort any download in progress.
@@ -613,6 +616,7 @@ fn stop_generation(state: State<AppState>, request_id: String) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // DEMOCRITUS_DATA_DIR redirects app data for automated tests, so test
             // runs never touch the operator's real conversations.
@@ -654,6 +658,7 @@ fn main() {
                 active: Mutex::new(HashMap::new()),
                 activity: activity::ActivityLog::new(home::logs_dir(&home_dir)),
                 home: Mutex::new(home_dir.clone()),
+                data_dir: data_dir.clone(),
                 approvals: operator::Approvals::default(),
                 download_cancel: Notify::new(),
                 lockdown: std::sync::atomic::AtomicBool::new(lockdown),
@@ -716,6 +721,10 @@ fn main() {
             security::security_check,
             security::security_fix,
             agent::agent_run,
+            agent::agent_folder,
+            agent::agent_set_folder,
+            agent::agent_pick_folder,
+            agent::agent_save_log,
             agent::agent_respond,
             agent::agent_stop,
             agent::agent_forget,

@@ -119,23 +119,41 @@
           <button class="rail-btn round-btn back-link" type="button" data-page="chat" title="Back to chat" aria-label="Back to chat"><span class="rail-icon" data-icon="back"></span></button>
           <h1 class="page-title code-title">Coding agent</h1>
           <div class="code-head-controls">
-            <label class="inset-pill code-folder-chip" title="The agent sees and changes only files inside this folder. Democritus's own folders and model files are off limits.">
+            <span class="inset-pill code-folder-chip" title="The agent sees and changes only files inside this folder. Democritus's own folders and model files are off limits.">
               <span class="field-icon" data-icon="folder"></span>
-              <span class="sr-only">Project folder</span>
-              <input id="code-folder" class="mono" type="text" placeholder="No folder chosen" spellcheck="false" autocomplete="off" readonly />
-            </label>
-            <button id="code-change-folder" class="pill-btn small code-head-btn" type="button">Change folder</button>
+              <span class="sr-only">Project folder:</span>
+              <span id="code-folder" class="mono is-empty" aria-live="polite">No folder chosen</span>
+            </span>
+            <div class="code-folder-wrap">
+              <button id="code-change-folder" class="pill-btn small code-head-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="code-folder-pop">Change folder</button>
+              <div id="code-folder-pop" class="code-folder-pop" role="dialog" aria-label="Choose the project folder" hidden>
+                <button id="code-folder-browse" class="pill-btn small code-folder-browse" type="button"><span class="rail-icon" data-icon="folder"></span>Browse…</button>
+                <form id="code-folder-form" class="code-folder-form">
+                  <label for="code-folder-paste" class="code-folder-label">Paste a folder path</label>
+                  <div class="code-folder-row">
+                    <input id="code-folder-paste" class="mono" type="text" placeholder="D:\projects\my-app" spellcheck="false" autocomplete="off" />
+                    <button id="code-folder-use" class="pill-btn small accent" type="submit">Use</button>
+                  </div>
+                </form>
+                <p id="code-folder-error" class="code-folder-error" role="alert" hidden></p>
+                <div class="code-folder-recent">
+                  <h3 class="code-folder-label" id="code-folder-recent-title">Recent</h3>
+                  <ul id="code-folder-recent" aria-labelledby="code-folder-recent-title"></ul>
+                </div>
+              </div>
+            </div>
             <label class="inset-pill code-brain" title="A coder model works best">
               <span class="label">Brain</span>
               <select id="code-model" class="mono"></select>
             </label>
             <button id="code-new" class="pill-btn small code-head-btn" type="button">New task</button>
+            <button id="code-activity-btn" class="pill-btn small code-head-btn code-activity-btn" type="button" aria-pressed="false" aria-controls="code-activity" title="Show or hide the live activity log">Activity</button>
             <button id="code-agent" class="pill-btn code-agent-btn" type="button" role="switch" aria-checked="false"><span class="rail-icon" data-icon="code"></span><span id="code-agent-label">Agent off</span></button>
           </div>
           <div class="menu-slot"></div>
         </header>
         <div class="code-safety" role="group" aria-label="What the agent may do">
-          <span class="code-safety-sandbox"><span class="rail-icon" data-icon="shield"></span>Sandbox: this folder only</span>
+          <span class="code-safety-sandbox" title="The only folder the agent can see and change, as Democritus resolved it"><span class="rail-icon" data-icon="shield"></span>Sandbox: <span id="code-sandbox-path" class="mono" aria-live="polite">checking…</span></span>
           <span>Can't run commands</span>
           <span>No internet</span>
           <span>Every write needs your approval</span>
@@ -146,14 +164,31 @@
           <span class="banner-text"></span>
           <button class="rail-btn pill-btn small" type="button" data-page="operator">Settings &amp; security</button>
         </div>
-        <section id="code-log" class="code-log" aria-label="Messages" aria-live="polite"></section>
-        <footer class="code-composer">
-          <div class="composer-box">
-            <label for="code-input" class="sr-only">Tell the agent what to do</label>
-            <textarea id="code-input" rows="1" placeholder="Tell the agent what to do in this folder…   Enter to send · Shift+Enter for a new line" spellcheck="true"></textarea>
-            <button id="code-send" class="send-btn" type="button" title="Send (Enter)" aria-label="Send"></button>
+        <div class="code-body">
+          <div class="code-main">
+            <section id="code-log" class="code-log" aria-label="Messages" aria-live="polite"></section>
+            <footer class="code-composer">
+              <div class="composer-box">
+                <label for="code-input" class="sr-only">Tell the agent what to do</label>
+                <textarea id="code-input" rows="1" placeholder="Tell the agent what to do in this folder…   Enter to send · Shift+Enter for a new line" spellcheck="true"></textarea>
+                <button id="code-send" class="send-btn" type="button" title="Send (Enter)" aria-label="Send"></button>
+              </div>
+            </footer>
           </div>
-        </footer>
+          <!-- A read-only view of what the agent does, as it happens. Not a shell: nothing here runs. -->
+          <aside id="code-activity" class="code-activity" aria-label="Agent activity" hidden>
+            <div class="activity-head">
+              <h2 class="activity-title">Activity</h2>
+              <div class="activity-tools" role="toolbar" aria-label="Activity log">
+                <button id="activity-pause" class="pill-btn small" type="button" aria-pressed="false" title="Stop following the newest line">Pause scroll</button>
+                <button id="activity-copy" class="pill-btn small" type="button">Copy log</button>
+                <button id="activity-clear" class="pill-btn small" type="button">Clear</button>
+                <button id="activity-save" class="pill-btn small" type="button" title="Save the log as a text file in Democritus's logs folder">Save log</button>
+              </div>
+            </div>
+            <div id="activity-log" class="activity-log mono" role="log" aria-live="off" aria-label="Agent activity log" tabindex="0"></div>
+          </aside>
+        </div>
       </section>
 
       <!-- ================= BUILD DEMOCRITUS (Steps 6D and 6E) ================= -->
