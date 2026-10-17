@@ -26,6 +26,9 @@
               <button class="rail-btn icon-tile" type="button" data-page="memory" title="Memory" aria-label="Memory">
                 <span class="rail-icon" data-icon="folder"></span><span id="memory-badge" class="rail-badge" hidden></span>
               </button>
+              <button class="rail-btn icon-tile" type="button" data-page="build" title="Build Democritus" aria-label="Build Democritus">
+                <span class="rail-icon" data-icon="flask"></span><span id="build-badge" class="rail-badge" hidden></span>
+              </button>
               <button class="rail-btn icon-tile" type="button" data-page="code" title="Code (coding agent)" aria-label="Code"><span class="rail-icon" data-icon="code"></span></button>
               <button class="rail-btn icon-tile" type="button" data-page="log" title="Activity log" aria-label="Activity log"><span class="rail-icon" data-icon="list"></span></button>
               <button id="lockdown-btn" class="icon-tile lockdown" type="button" title="Lockdown: block all internet access and pause learning" aria-label="Lockdown" aria-pressed="false">
@@ -175,6 +178,92 @@
         </div>
       </section>
 
+      <!-- ================= BUILD DEMOCRITUS (Steps 6D and 6E) ================= -->
+      <section id="page-build" class="page" aria-label="Build Democritus" hidden>
+        <header class="page-head">
+          <button class="rail-btn round-btn back-link" type="button" data-page="chat" title="Back to chat" aria-label="Back to chat"><span class="rail-icon" data-icon="back"></span></button>
+          <div class="page-head-text">
+            <h1 class="page-title">Build Democritus</h1>
+            <span id="bd-sub" class="muted">Distil a large local model into a small brain of your own</span>
+          </div>
+          <div class="page-head-controls">
+            <span id="bd-awake" class="inset-pill awake-pill" hidden><span class="rail-icon" data-icon="moon"></span>PC kept awake · safe to leave overnight</span>
+            <div id="bd-tabs" class="segmented" role="radiogroup" aria-label="View">
+              <button type="button" role="radio" aria-checked="true" data-tab="build">Build</button>
+              <button type="button" role="radio" aria-checked="false" data-tab="examples">Your examples <span id="bd-ex-count" class="mono small"></span></button>
+            </div>
+          </div>
+        </header>
+        <div id="bd-off" class="banner" hidden>
+          <span class="banner-text"></span>
+          <button class="rail-btn pill-btn small" type="button" data-page="operator">Settings &amp; security</button>
+        </div>
+
+        <div id="bd-build" class="bd-layout">
+          <section class="bd-main" aria-label="Training progress">
+            <div class="card bd-status">
+              <div class="bd-ring">
+                <div id="bd-dial" class="bd-dial" role="img" aria-label="Overall progress 0 percent">
+                  <div class="bd-dial-center"><span id="bd-pct" class="bd-pct">0%</span><span id="bd-stage-label" class="muted small"></span></div>
+                </div>
+              </div>
+              <div class="bd-status-text">
+                <span id="bd-status-line" class="label"></span>
+                <span id="bd-headline" class="bd-headline"></span>
+                <span id="bd-times" class="muted small"></span>
+                <div id="bd-setup" class="bd-setup" hidden>
+                  <label class="bd-field"><span class="label">Teacher</span><select id="bd-teacher" class="inset-select mono"></select></label>
+                  <span class="bd-field"><span class="label">Student</span><span class="inset-pill mono small">Qwen3.5-4B (qwen3.5:4b)</span></span>
+                  <label class="bd-field"><span class="label">Lessons</span><input id="bd-lessons" class="inset-input mono" type="number" min="50" max="5000" step="50" value="1000" /></label>
+                  <label class="toggle-chip bd-history"><input id="bd-history" type="checkbox" class="switch" checked />Use questions from your conversations as lesson topics</label>
+                </div>
+                <div id="bd-actions" class="bd-actions"></div>
+              </div>
+            </div>
+            <ol id="bd-stages" class="bd-stages" aria-label="Stages"></ol>
+            <div class="bd-stats">
+              <div class="bd-stat"><span class="label">GPU temperature</span><span id="bd-temp" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-temp-bar"></div></div><span class="label">Pauses at 83°C</span></div>
+              <div class="bd-stat"><span class="label">GPU memory</span><span id="bd-mem" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-mem-bar"></div></div><span id="bd-mem-of" class="label"></span></div>
+              <div class="bd-stat"><span class="label">Training step</span><span id="bd-step" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-step-bar"></div></div><span id="bd-loss" class="label"></span></div>
+              <div class="bd-stat"><span class="label">Lessons</span><span id="bd-lessons-n" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-lessons-bar" class="ok"></div></div><span id="bd-lessons-note" class="label"></span></div>
+            </div>
+            <div id="bd-log" class="inset-box bd-log" aria-label="Build log" aria-live="polite"></div>
+          </section>
+
+          <aside class="card bd-caps" aria-label="Capabilities">
+            <div class="with-action"><h2 class="section-title">Capabilities</h2><span id="bd-cap-name" class="mono label"></span></div>
+            <span id="bd-cap-note" class="small muted"></span>
+            <div id="bd-cap-bars" class="bd-cap-bars"></div>
+            <div class="bd-cap-tiles">
+              <div class="inset-box bd-tile"><span id="bd-cap-tps" class="bd-tile-num">—</span><span class="label">tokens/sec</span></div>
+              <div class="inset-box bd-tile"><span id="bd-cap-speed" class="bd-tile-num">—</span><span class="label">faster than teacher</span></div>
+            </div>
+            <div class="bd-cap-actions">
+              <button id="bd-make-default" class="pill-btn accent" type="button" disabled>Make default brain</button>
+              <button id="bd-compare" class="pill-btn" type="button" disabled>Compare answers</button>
+            </div>
+            <span class="small muted bd-cap-foot">The default brain never changes on its own. Older versions stay for rollback.</span>
+          </aside>
+        </div>
+
+        <div id="bd-examples" class="bd-examples" hidden>
+          <section class="card bd-ex-head" aria-label="Dataset">
+            <div class="bd-ex-text">
+              <h2 class="section-title">Lessons from you</h2>
+              <p class="small muted">Answers you rated with a thumbs up or edited in chat. Every build starts with these, plus <span id="bd-ex-identity"></span> examples of Democritus describing itself. Leave out anything you don't want a model to learn.</p>
+              <p id="bd-ex-latest" class="small muted"></p>
+            </div>
+            <div class="bd-ex-actions">
+              <span id="bd-ex-summary" class="inset-pill small"></span>
+              <button id="bd-export" class="pill-btn accent small" type="button">Export dataset</button>
+            </div>
+          </section>
+          <section class="card bd-ex-list" aria-label="Examples">
+            <ul id="bd-ex-items" class="bd-ex-items"></ul>
+          </section>
+        </div>
+      </section>
+
       <!-- ================= MEMORY ================= -->
       <section id="page-memory" class="page" aria-label="Memory" hidden>
         <header class="page-head">
@@ -247,6 +336,7 @@
               <option value="security">Security</option>
               <option value="model">Models</option>
               <option value="agent">Coding agent</option>
+              <option value="training">Training</option>
             </select>
             <label class="inset-field grow">
               <span class="sr-only">Filter</span>
@@ -443,6 +533,30 @@
           <button class="btn" type="button" id="settings-cancel">Cancel</button>
           <button class="btn primary" type="submit">Save</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="edit-dialog" class="wide-dialog">
+      <form method="dialog">
+        <h2>Edit this answer</h2>
+        <p class="muted small">Write the answer you wanted. Democritus shows and uses your version from now on, and Build Democritus can learn from it. The original is kept.</p>
+        <label for="edit-text" class="sr-only">Your answer</label>
+        <textarea id="edit-text" class="inset-area" rows="12" spellcheck="true"></textarea>
+        <div class="dialog-actions">
+          <button id="edit-remove" class="btn" value="remove" type="submit">Remove my edit</button>
+          <span class="spacer"></span>
+          <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+          <button class="btn primary" value="save" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="compare-dialog" class="wide-dialog">
+      <form method="dialog">
+        <h2 id="compare-title">Compare answers</h2>
+        <p class="muted small">The test questions were never part of the lessons. Scores are the teacher's grades from 0 to 10.</p>
+        <div id="compare-items" class="compare-items"></div>
+        <div class="dialog-actions"><button class="btn primary" value="close" type="submit">Close</button></div>
       </form>
     </dialog>
 

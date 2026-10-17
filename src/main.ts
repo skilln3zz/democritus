@@ -8,6 +8,7 @@ import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 import {
   api,
+  type BuildSummary,
   type Conversation,
   type LoadedModel,
   type Message,
@@ -28,6 +29,7 @@ import { initOperatorPage, loadOperator } from './operatorpage';
 import { Orb } from './orb';
 import { currentPage, initRail, showPage } from './pages';
 import { initCodePage } from './codepage';
+import { initBuildPage } from './buildpage';
 import { initFirewallWarning, initSecurityCheck } from './securitypage';
 import { applyTheme, initThemeSwitch, type ThemePref } from './theme';
 import { $, askConfirm, askText, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
@@ -370,6 +372,8 @@ function renderModels() {
 // ---------- brain picker (the native select stays the source of truth) ----------
 
 let speeds: Record<string, number> = {};
+/** Finished "Build Democritus" builds, to label built brains in the picker. */
+let builtModels: BuildSummary[] = [];
 
 function renderBrain() {
   const sel = els.modelSelect;
@@ -381,6 +385,8 @@ function renderBrain() {
     .map((m) => {
       const details = [m.parameterSize, m.quantization, m.sizeBytes != null ? formatBytes(m.sizeBytes) : null].filter(Boolean);
       if (m.id === helper) details.push('memory helper');
+      const built = builtModels.find((b) => b.name === m.id);
+      if (built) details.unshift(built.testRun ? 'test build' : `built ${built.finishedAt ? relativeTime(built.finishedAt) : 'by you'}${built.scores ? ` · knows who it is ${built.scores.identity}%` : ''}`);
       const speed = speeds[m.id] ? `${speeds[m.id]} tok/s` : '';
       return (
         `<button type="button" class="brain-option" role="option" aria-selected="${m.id === sel.value}" data-model="${escapeText(m.id)}">` +
@@ -397,6 +403,13 @@ function openBrainMenu() {
   els.brainBtn.setAttribute('aria-expanded', 'true');
   renderBrain();
   (els.brainOptions.querySelector<HTMLElement>('[aria-selected="true"]') ?? els.brainOptions.querySelector<HTMLElement>('.brain-option'))?.focus();
+  void api
+    .buildOverview()
+    .then((o) => {
+      builtModels = o.finished;
+      if (!els.brainMenu.hidden) renderBrain();
+    })
+    .catch(() => {});
   void api
     .modelSpeeds()
     .then((s) => {
@@ -810,7 +823,7 @@ function updateMessageEl(el: HTMLElement, m: Message) {
 
   el.querySelector('.model-tag')!.textContent = m.model || 'assistant';
   const streaming = m.status === 'streaming';
-  const content = m.content.replace(/^\s+/, '');
+  const content = shownText(el, m).replace(/^\s+/, '');
   const reasoning = m.reasoning.trim();
   const mode = thinkingDisplay();
   const g = state.generation?.message === m ? state.generation : null;
@@ -856,15 +869,26 @@ function updateMessageEl(el: HTMLElement, m: Message) {
   errorBox.hidden = !m.error;
   errorBox.textContent = m.error ?? '';
 
-  el.querySelector('.footer')!.innerHTML = streaming ? '' : footerHtml(m);
+  el.querySelector('.footer')!.innerHTML = streaming ? '' : footerHtml(m, el.dataset.original === '1');
+}
+
+/** The reply as shown: the operator's edit, unless they asked to see the original. */
+function shownText(el: HTMLElement, m: Message): string {
+  return m.edited && el.dataset.original !== '1' ? m.edited : m.content;
 }
 
 function renderThinking(details: HTMLDetailsElement, m: Message) {
   details.querySelector('.thinking-body')!.innerHTML = renderMarkdown(m.reasoning.trim());
 }
 
-function footerHtml(m: Message): string {
+function footerHtml(m: Message, original: boolean): string {
   const bits: string[] = [];
+  if (m.edited) {
+    bits.push(
+      `<span class="badge edited-badge">${original ? 'Original answer' : 'Edited by you'}</span>` +
+        `<button type="button" class="link-btn toggle-original">${original ? 'Show your edit' : 'Show original'}</button>`,
+    );
+  }
   if (m.status === 'stopped') bits.push('<span class="badge">Stopped</span>');
   if (m.stats?.finishReason === 'length') bits.push('<span class="badge warn">Hit max-token limit</span>');
   if (m.stats?.tokensPerSecond) bits.push(`<span>${m.stats.tokensPerSecond} tok/s</span>`);
@@ -876,6 +900,15 @@ function footerHtml(m: Message): string {
     bits.push(`<span title="${escapeText(tip)}">~${kTokens(c.estimatedPromptTokens)} / ${kTokens(c.numCtx)} context</span>`);
   }
   if (m.content.trim()) bits.push(`<button type="button" class="link-btn copy-message">${icons.copy}Copy</button>`);
+  // Feedback (Step 6D): ratings and edits are kept for Build Democritus.
+  if (m.status === 'complete' && m.content.trim()) {
+    bits.push(
+      `<span class="rate-row" role="group" aria-label="Rate this answer">` +
+        `<button type="button" class="rate-btn" data-rating="1" aria-pressed="${m.rating === 1}" title="Good answer" aria-label="Good answer">${icons.thumbUp}</button>` +
+        `<button type="button" class="rate-btn" data-rating="-1" aria-pressed="${m.rating === -1}" title="Not a good answer" aria-label="Not a good answer">${icons.thumbDown}</button>` +
+        `<button type="button" class="link-btn edit-reply" title="Write the answer you wanted">${icons.edit}Edit</button></span>`,
+    );
+  }
   return bits.join('<span class="sep">·</span>');
 }
 
@@ -1000,6 +1033,8 @@ async function send() {
       error: null,
       stats: null,
       createdAt: Date.now(),
+      rating: 0,
+      edited: null,
     },
     el: null,
     stopRequested: false,
@@ -1382,11 +1417,59 @@ els.messages.addEventListener('click', (e) => {
     void copyText(codeCopy.closest('.code-block')?.querySelector('code')?.textContent ?? '', codeCopy);
     return;
   }
-  const msgCopy = target.closest<HTMLElement>('.copy-message');
-  const msgEl = msgCopy?.closest<HTMLElement>('.message');
+  const msgEl = target.closest<HTMLElement>('.message');
   const m = msgEl && messageOf.get(msgEl);
-  if (msgCopy && m) void copyText(m.content.trim(), msgCopy);
+  if (!msgEl || !m) return;
+  const msgCopy = target.closest<HTMLElement>('.copy-message');
+  if (msgCopy) void copyText(shownText(msgEl, m).trim(), msgCopy);
+  const rate = target.closest<HTMLElement>('.rate-btn');
+  if (rate) void rateReply(msgEl, m, Number(rate.dataset.rating));
+  if (target.closest('.edit-reply')) void editReply(msgEl, m);
+  if (target.closest('.toggle-original')) {
+    msgEl.dataset.original = msgEl.dataset.original === '1' ? '' : '1';
+    updateMessageEl(msgEl, m);
+  }
 });
+
+async function rateReply(el: HTMLElement, m: Message, rating: number) {
+  const next = m.rating === rating ? 0 : rating;
+  try {
+    await api.rateMessage(m.id, next);
+    m.rating = next;
+    updateMessageEl(el, m);
+    if (next === -1 && !m.edited) toast('Noted. Press Edit to write the answer you wanted; Build Democritus can learn from it.');
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
+}
+
+/** The edit dialog: resolves the new text, '' to remove the edit, or null. */
+function askEdit(current: string, hasEdit: boolean): Promise<string | null> {
+  const dialog = $<HTMLDialogElement>('#edit-dialog');
+  const text = $<HTMLTextAreaElement>('#edit-text');
+  text.value = current;
+  $<HTMLButtonElement>('#edit-remove').hidden = !hasEdit;
+  dialog.returnValue = '';
+  dialog.showModal();
+  text.focus();
+  return new Promise((resolve) =>
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'save' ? text.value : dialog.returnValue === 'remove' ? '' : null), { once: true }),
+  );
+}
+
+async function editReply(el: HTMLElement, m: Message) {
+  const text = await askEdit(m.edited ?? m.content, !!m.edited);
+  if (text === null || text.trim() === (m.edited ?? m.content).trim()) return;
+  try {
+    await api.editReply(m.id, text);
+    m.edited = text.trim() ? text.trim() : null;
+    el.dataset.original = '';
+    updateMessageEl(el, m);
+    toast(m.edited ? 'Saved. Democritus uses your version from now on.' : 'Your edit was removed.');
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
+}
 // <details> toggle doesn't bubble; capture it to render thinking on open.
 els.messages.addEventListener(
   'toggle',
@@ -1446,6 +1529,11 @@ async function init() {
   initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
   initSecurityCheck();
   initCodePage({ ensureModelFits, defaultModel: () => state.settings?.defaultModel ?? '' });
+  initBuildPage({
+    onDefaultChanged: async () => {
+      state.settings = await api.getSettings();
+    },
+  });
   initFirewallWarning();
   onPendingChange((n) => {
     pendingUpdates = n;

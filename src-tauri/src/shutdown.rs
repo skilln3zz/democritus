@@ -38,6 +38,8 @@ pub fn cleanup(app: &AppHandle, how: &str) {
             security::signal_gate_done(gate);
         }
         state.server.shutdown();
+        // A training worker checkpoints and stops (the build resumes later).
+        crate::build::on_exit(&state);
     }
 }
 

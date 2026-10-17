@@ -19,9 +19,9 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
 | 6C | Memory cleanup proposals | Not started |
-| 6D | Training dataset export and Train page (dataset side only) | Not started |
+| 6D | Ratings, edited answers, training dataset export ("Your examples" on the Build page) | **Done**, verified on Windows 2026-10-17 (`--only=build`, all 6D checks pass). Built ahead of 6A–6C at the operator's request |
 | Final | Installers, README, report to the operator | Not started |
-| 6E | "Build Democritus" distillation | **Not started on purpose.** Begins only after everything above is verified and reported |
+| 6E | "Build Democritus" distillation | **Built and verified with a test run** on Windows 2026-10-17 (`--only=build` 31/31, all six stages). Started early at the operator's request. **No full build has been run.** See "Build Democritus" below |
 
 ## What is done
 
@@ -339,6 +339,59 @@ Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safe
    - Row 6 with your real model store, and with a fake `test.bin` in `D:\Democritus\downloads` (should turn red, and nothing gets deleted).
    - The Log page shows "security check", "security fix confirmed" and "security fix done/failed".
 8. Attach button in the composer: pick a text file and a binary file (the binary should be refused, as with drag and drop).
+
+## Build Democritus (Steps 6D and 6E, 2026-10-17)
+
+The operator asked to start 6E now (ahead of 6A–6C) with a preflight, approved downloads 0–4 for a 4B student, and asked for 6D first, then the Build page and the brain-picker entry, then a small test run. **Never start a full build without the operator.**
+
+### Downloads (approved items 0–5, all on D:)
+
+| Item | What | Where |
+|---|---|---|
+| 0 | Model card and file list of `Qwen/Qwen3.5-4B` (commit `851bf6e806ef`) | read only |
+| 1 | torch 2.14.1+cu130 (1.85 GB, download.pytorch.org, sha256 checked) | `D:\Democritus\training\env` |
+| 2–3 | transformers 5.18.0, peft 0.21.2, accelerate 1.15.0, bitsandbytes 0.50.2, safetensors, huggingface_hub, tokenizers + deps (73 MB, pypi.org, every file hash-checked; pinned to releases before 2026-10-03, except tokenizers 0.23.3) | `D:\Democritus\training\env`, lock file `D:\Democritus\training\requirements-lock.txt` |
+| 4 | `Qwen/Qwen3.5-4B` safetensors at `851bf6e806ef` (8.70 GB, both shards sha256 verified against Hugging Face) | `D:\Democritus\training\base\Qwen3.5-4B` |
+| 5 | llama.cpp **v0.5.0** (stable release, 2026-09-23, commit `7fe450e19305`), source archive 37.5 MB, sha256 `e5617413a0b5…2ab17d`; only `convert_hf_to_gguf.py`, `conversion/` and `gguf-py/` installed (116 files, 1.78 MB; per-file sha256 in `SHA256SUMS.txt`). No PyPI packages needed (sentencepiece and mistral_common are only for other model families). | `D:\Democritus\training\toolkit\llama.cpp` |
+
+Why item 5: Ollama 0.40.2 on Windows can't import safetensors at all (every safetensors import goes through MLX, which isn't on Windows), has dropped LoRA adapters, and only quantizes at import for safetensors. So the converter writes the final **Q8_0** GGUF itself. Q4_K_M would need llama.cpp's `llama-quantize.exe` too (not downloaded; ask first).
+
+### 6D: what it does
+
+- Chat: thumbs up / down and **Edit** under every finished reply. An edit is shown (badge "Edited by you", "Show original") and sent to the model instead of the original from then on; the original stays in the database. Table `feedback` (schema v5).
+- Build page → **Your examples**: replies rated up or edited, with an Include switch each; **Export dataset** writes `<home>\training\dataset\examples-<stamp>.jsonl` and `latest.json`. Each line has the earlier turns (up to 4) and the answer; the 12 self-description examples (`dataset.rs`, `{model}` filled in per build) are always added. A build exports by itself at Preflight. There is one export, used by 6E.
+
+### 6E: how it works
+
+`build.rs` (supervisor), `buildcore.rs` (pure, unit-tested), `python/democritus_train.py` (the worker, built into the app and written to `<tools>\toolkit\`), `src/buildpage.ts`.
+
+1. **Preflight**: permission (Allow fine-tuning, Lockdown off), training tools (`check` in the worker), student weights verified, teacher installed, `qwen3.5:4b` present (its chat template), GPU, disk; the converter is reported but not required to start.
+2. **Lessons** (`plan.json`, `lessons.jsonl`, written one by one): your examples, the self-description examples, then the teacher's answers to your own past questions (optional switch), then built-in topics. System prompt = Democritus identity naming the built model. Thinking off.
+3. **Training**: QLoRA (NF4, rank 16, LoRA on the language model only, vision tower untouched), 2 passes, 8 lessons per step, checkpoint every 25 steps. The worker runs below normal priority inside a Windows job object (it dies with the app), offline (`HF_HUB_OFFLINE=1`).
+4. **Packaging**: merge on the CPU → Q8_0 GGUF with the converter (`convert` in the worker; `--no-mtp`, because transformers doesn't keep the multi-token-prediction layer and Ollama's own qwen3.5 GGUFs leave it out too) → `ollama create democritus:4b-vN` with RENDERER/PARSER/PARAMETER copied from `qwen3.5:4b` → a short chat to check it loads. Only then are the merged weights and the GGUF deleted (the adapter is kept). A 4B build is 4.5 GB in Ollama.
+5. **Testing**: 12 test prompts (4 categories) never used as lessons; student and teacher answer, the teacher grades both (0–10), identity answers also get a rule check; scores are the student's percent of the teacher's; speed from Ollama's own timings. **Compare answers** shows them side by side.
+6. **Done**: the model shows in the brain picker as "built …". **The default brain changes only when the operator presses "Make default brain".**
+
+- **Pause / Resume / Cancel**: pause waits for the current lesson or step and saves (training: checkpoint, GPU freed); Resume continues from there. Lockdown and switching the permission off pause a build, and Lockdown blocks Resume.
+- **Overnight**: Windows is kept awake while a build runs (the display may sleep); above 83 °C training pauses and carries on by itself below 72 °C; a build that was running when the app closed shows as paused and resumes from the last checkpoint.
+- **Log**: kind `training` (Log page filter "Training"): ratings, edits, exports, start, pause, resume, lessons, training, packaging, test scores, failures; model requests as `network`.
+- Builds: `<home>\training\builds\<id>\` (build.json, plan, lessons, worker.log, checkpoint, adapter, report.json). Test runs are named `democritus:4b-test`; real builds `democritus:4b-v1`, `-v2`, …
+- `DEMOCRITUS_TRAINING_TOOLS` (set by `scripts\dev-e2e.ps1`) lets a test instance use the real tools while keeping its builds in the test home.
+
+### Measured on Windows (RTX 5070, 2026-10-17)
+
+- Smoke run (6 short lessons): peak VRAM 5.1 GB, about 1.6 s per step.
+- Test run (`--only=build`, 20 lessons: 2 yours, 12 identity, 6 from qwen3.8:27b): 4 steps of 2 lessons, **12.7 s per step**, **peak VRAM 7.9 GB**. The slow part is the hybrid model's linear-attention layers: their fast kernels (`flash-linear-attention`, `causal-conv1d`) have no Windows builds, so transformers uses its PyTorch fallback. A full build of 1,000 lessons (250 steps of 8) would take roughly 3–4 h of training plus the lessons (6 teacher lessons took about 4 min).
+- Merge on the CPU: 80 s. Ollama import of safetensors: impossible on Windows (MLX); LoRA adapters: no longer supported; `--quantize` refuses GGUF imports.
+- First e2e (before item 5): 25/28, stopped at Packaging as designed. With item 5, the stopped build was **resumed after an app restart** and packaged; its first package didn't load (`blk.32.attn_norm.weight not found`: the MTP layer), which is why the converter now runs with `--no-mtp`, Packaging checks the model answers, and Testing fails instead of scoring 0 when the student can't answer.
+- **Final e2e `--only=build`: 31/31** (fresh test home): 6D all pass; Pause, Resume, Lockdown pause and blocked Resume pass; 20 lessons; 4 steps at 11.5 s/step, peak VRAM 7.3 GB; `democritus:4b-test` packaged (Q8_0, 4.5 GB) and answering; scores vs qwen3.8:27b: knows who it is 90%, rules 100%, everyday 100%, coding 20% (only 4 training steps, so this is essentially the base 4B); **99.8 tok/s vs the teacher's 8.5 (11.7×)**; default brain unchanged.
+- Twice the test window switched to the Chat page by itself about two minutes into a build (logged by the test, 10:28:55 the second time). No app code switches pages except a click or Ctrl+N; the test now opens the Build page before each button press. Watch for it.
+
+### Next
+
+1. Operator: a full build when wanted (Build page → Begin training; best overnight). Expect roughly 1–2 h of lessons with the 27B teacher for 1,000 lessons, then 3–4 h of training.
+2. `democritus:4b-test` (4.5 GB, a test build) is installed in Ollama; remove it with `ollama rm democritus:4b-test` if it isn't wanted (not done automatically: it's outside the folders the app may delete in).
+3. Optional: Q4_K_M packaging (smaller, faster) needs `llama-quantize.exe` from llama.cpp v0.5.0, another download to approve.
 
 ## Coding agent (cloud session, branch `cloud-work`)
 

@@ -37,6 +37,11 @@ pub struct Message {
     pub error: Option<String>,
     pub stats: Option<serde_json::Value>,
     pub created_at: i64,
+    /// The operator's rating of a reply: 1 thumbs up, -1 thumbs down, 0 none.
+    pub rating: i64,
+    /// The operator's corrected version of a reply, shown and sent instead of
+    /// the original from then on.
+    pub edited: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +213,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 5 {
+        conn.execute_batch(
+            "BEGIN;
+             -- The operator's feedback on a reply (Step 6D): a rating, an edited
+             -- answer, and whether to leave it out of the training dataset.
+             CREATE TABLE feedback (
+                 message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                 rating INTEGER NOT NULL DEFAULT 0 CHECK (rating IN (-1, 0, 1)),
+                 edited TEXT,
+                 excluded INTEGER NOT NULL DEFAULT 0,
+                 updated_at INTEGER NOT NULL
+             );
+             PRAGMA user_version = 5;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -246,7 +267,9 @@ fn conversation_from_row(r: &Row) -> rusqlite::Result<Conversation> {
     Ok(Conversation { id: r.get(0)?, title: r.get(1)?, model: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)?, project: r.get(5)? })
 }
 
-const MESSAGE_COLUMNS: &str = "id, conversation_id, role, content, reasoning, model, status, error, stats, created_at";
+/// Message columns plus the operator's feedback; callers add WHERE/ORDER BY.
+const MESSAGE_COLUMNS: &str = "m.id, m.conversation_id, m.role, m.content, m.reasoning, m.model, m.status, m.error, m.stats, m.created_at, \
+     COALESCE(f.rating, 0), f.edited FROM messages m LEFT JOIN feedback f ON f.message_id = m.id";
 
 fn message_from_row(r: &Row) -> rusqlite::Result<Message> {
     let stats: Option<String> = r.get(8)?;
@@ -261,6 +284,8 @@ fn message_from_row(r: &Row) -> rusqlite::Result<Message> {
         error: r.get(7)?,
         stats: stats.and_then(|s| serde_json::from_str(&s).ok()),
         created_at: r.get(9)?,
+        rating: r.get(10)?,
+        edited: r.get(11)?,
     })
 }
 
@@ -327,13 +352,13 @@ pub fn touch_conversation(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 }
 
 pub fn get_messages(conn: &Connection, conversation_id: i64) -> rusqlite::Result<Vec<Message>> {
-    let mut stmt = conn.prepare(&format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ?1 ORDER BY id"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {MESSAGE_COLUMNS} WHERE m.conversation_id = ?1 ORDER BY m.id"))?;
     let rows = stmt.query_map(params![conversation_id], message_from_row)?;
     rows.collect()
 }
 
 pub fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Option<Message>> {
-    conn.query_row(&format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1"), params![id], message_from_row)
+    conn.query_row(&format!("SELECT {MESSAGE_COLUMNS} WHERE m.id = ?1"), params![id], message_from_row)
         .optional()
 }
 
@@ -370,12 +395,13 @@ pub fn finish_message(
 
 /// The turns to send back to the model, after message `after_id` (the end of
 /// the stored summary). Reasoning is left out (Qwen's guidance), as are failed
-/// or empty replies.
+/// or empty replies. A reply the operator edited is sent as edited.
 pub fn history(conn: &Connection, conversation_id: i64, after_id: i64) -> rusqlite::Result<Vec<Turn>> {
     let mut stmt = conn.prepare(
-        "SELECT id, role, content, model FROM messages
-         WHERE conversation_id = ?1 AND id > ?2 AND status IN ('complete', 'stopped') AND content <> ''
-         ORDER BY id",
+        "SELECT m.id, m.role, COALESCE(NULLIF(f.edited, ''), m.content) AS text, m.model FROM messages m
+         LEFT JOIN feedback f ON f.message_id = m.id
+         WHERE m.conversation_id = ?1 AND m.id > ?2 AND m.status IN ('complete', 'stopped') AND text <> ''
+         ORDER BY m.id",
     )?;
     let rows = stmt.query_map(params![conversation_id, after_id], |r| Ok(Turn { id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, model: r.get(3)? }))?;
     rows.collect()

@@ -54,6 +54,12 @@ pub fn apply_operator(state: &AppState, next: OperatorSettings) -> CmdResult<Ope
     if (next.lockdown && !before.lockdown) || (!next.allow_coding_agent && before.allow_coding_agent) {
         crate::agent::stop_all(state);
     }
+    // Lockdown pauses learning, so it pauses a build too (as does switching the permission off).
+    if next.lockdown && !before.lockdown {
+        crate::build::pause_for(state, "lockdown");
+    } else if !next.allow_training && before.allow_training {
+        crate::build::pause_for(state, "permission");
+    }
     if next.lockdown != before.lockdown {
         if next.lockdown {
             // Drop anything waiting for approval and abort a running download.

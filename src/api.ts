@@ -93,6 +93,10 @@ export interface Message {
   error: string | null;
   stats: MessageStats | null;
   createdAt: number;
+  /** The operator's rating: 1 thumbs up, -1 thumbs down, 0 none. */
+  rating: number;
+  /** The operator's corrected answer, shown and sent instead of the original. */
+  edited: string | null;
 }
 
 export type StreamEvent =
@@ -307,6 +311,119 @@ export interface FirewallStatus {
   detail: string;
 }
 
+/** A rated or edited reply that can become a lesson (Step 6D). */
+export interface TrainingExample {
+  messageId: number;
+  conversationId: number;
+  conversationTitle: string;
+  model: string;
+  rating: number;
+  edited: boolean;
+  excluded: boolean;
+  prompt: string;
+  answer: string;
+  createdAt: number;
+}
+
+export interface ExportManifest {
+  file: string;
+  exportedAt: string;
+  rated: number;
+  edited: number;
+  identity: number;
+  excluded: number;
+}
+
+export interface DatasetStatus {
+  folder: string;
+  latest: ExportManifest | null;
+  identityExamples: number;
+}
+
+export type BuildStage = 'preflight' | 'lessons' | 'training' | 'packaging' | 'testing' | 'done';
+export type BuildStatus = 'running' | 'paused' | 'failed' | 'cancelled' | 'done';
+
+export interface BuildCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface BuildScores {
+  identity: number;
+  rules: number;
+  everyday: number;
+  coding: number;
+  studentTps: number;
+  teacherTps: number;
+  speedup: number;
+  testedAt: number;
+}
+
+export interface Build {
+  id: string;
+  name: string;
+  testRun: boolean;
+  student: string;
+  teacher: string;
+  lessonTarget: number;
+  steps: number;
+  gradAccum: number;
+  stage: BuildStage;
+  status: BuildStatus;
+  statusText: string;
+  pauseReason: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+  lessonsDone: number;
+  lessonsFromYou: number;
+  step: number;
+  loss: number | null;
+  lossStart: number | null;
+  secondsPerStep: number | null;
+  secondsPerLesson: number | null;
+  checkpointAt: number | null;
+  vramPeak: number | null;
+  preflight: BuildCheck[];
+  scores: BuildScores | null;
+  error: string | null;
+  log: { ts: number; text: string; alert: boolean }[];
+  progress: number;
+  eta: number | null;
+}
+
+export interface BuildSummary {
+  id: string;
+  name: string;
+  testRun: boolean;
+  teacher: string;
+  finishedAt: number | null;
+  scores: BuildScores | null;
+  lessons: number;
+}
+
+export interface BuildOverview {
+  current: Build | null;
+  finished: BuildSummary[];
+  trainingDir: string;
+  students: string[];
+  defaultTeacher: string;
+}
+
+export interface GpuStats {
+  name: string;
+  temp: number;
+  memUsed: number;
+  memTotal: number;
+  util: number;
+}
+
+export interface BuildReport {
+  scores: BuildScores;
+  items: { category: string; prompt: string; student: string; teacher: string; studentScore: number; teacherScore: number }[];
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -375,6 +492,22 @@ export const api = {
   requestDownload: (url: string) => invoke<Approval>('request_download', { url }),
   firewallStatus: () => invoke<FirewallStatus>('firewall_status'),
   firewallReenable: () => invoke<FirewallStatus>('firewall_reenable'),
+  rateMessage: (id: number, rating: number) => invoke<void>('rate_message', { id, rating }),
+  editReply: (id: number, text: string) => invoke<void>('edit_reply', { id, text }),
+  setExampleExcluded: (id: number, excluded: boolean) => invoke<void>('set_example_excluded', { id, excluded }),
+  trainingExamples: () => invoke<TrainingExample[]>('training_examples'),
+  datasetStatus: () => invoke<DatasetStatus>('dataset_status'),
+  exportDataset: () => invoke<ExportManifest>('export_dataset'),
+  buildOverview: () => invoke<BuildOverview>('build_overview'),
+  buildPreflight: (teacher: string, testRun: boolean) => invoke<BuildCheck[]>('build_preflight', { teacher, testRun }),
+  buildStart: (teacher: string, testRun: boolean, lessons: number, useHistory: boolean) => invoke<Build>('build_start', { teacher, testRun, lessons, useHistory }),
+  buildPause: () => invoke<void>('build_pause'),
+  buildResume: () => invoke<void>('build_resume'),
+  buildCancel: () => invoke<void>('build_cancel'),
+  buildDismiss: () => invoke<void>('build_dismiss'),
+  buildGpu: () => invoke<GpuStats | null>('build_gpu'),
+  buildReport: (id: string) => invoke<BuildReport>('build_report', { id }),
+  buildMakeDefault: (model: string) => invoke<void>('build_make_default', { model }),
   respondApproval: (id: string, approve: boolean, onProgress: (p: DownloadProgress) => void) => {
     const channel = new Channel<DownloadProgress>();
     channel.onmessage = onProgress;

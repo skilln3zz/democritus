@@ -37,6 +37,11 @@ export const icons = {
   arrowUp: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
   square: svg('<rect x="7" y="7" width="10" height="10" fill="currentColor"/>'),
   starburst: svg('<path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"/>'),
+  thumbUp: svg('<path d="M7 10v11H4V10z"/><path d="M7 10l4-7a2 2 0 0 1 3 2l-1 5h6a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 17.6 21H7"/>'),
+  thumbDown: svg('<path d="M17 14V3h3v11z"/><path d="M17 14l-4 7a2 2 0 0 1-3-2l1-5H5a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 6.4 3H17"/>'),
+  pause: svg('<path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor" stroke="none"/>'),
+  play: svg('<path d="M7 4l13 8-13 8z" fill="currentColor" stroke="none"/>'),
+  check: svg('<path d="M5 12l5 5L20 7"/>'),
   copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
 };
 

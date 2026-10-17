@@ -58,8 +58,7 @@ const TOGGLES: Toggle[] = [
   {
     key: 'allowTraining',
     label: 'Allow fine-tuning',
-    desc: 'Allow local training runs.',
-    disabled: 'Not available yet: training needs PyTorch, Unsloth and Qwen base weights, which you have not approved for download.',
+    desc: 'Let Build Democritus train a small model of your own on this computer from your rated answers and a larger local model. It uses the GPU for hours and never changes the default brain by itself. Lockdown pauses it.',
   },
 ];
 

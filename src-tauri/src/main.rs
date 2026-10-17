@@ -4,7 +4,10 @@
 mod activity;
 mod agent;
 mod agentcore;
+mod build;
+mod buildcore;
 mod context;
+mod dataset;
 mod db;
 mod home;
 mod identity;
@@ -56,6 +59,8 @@ pub struct AppState {
     memory_notify: Notify,
     /// The coding agent's tasks and pending edit approvals.
     agent: agent::AgentHub,
+    /// The current "Build Democritus" run (Step 6E).
+    build: build::BuildHub,
     /// Democritus's firewall rule switched off for an approved download, keyed
     /// by the download approval it belongs to.
     firewall_gate: Mutex<Option<(String, security::FirewallGate)>>,
@@ -654,10 +659,12 @@ fn main() {
                 lockdown: std::sync::atomic::AtomicBool::new(lockdown),
                 memory_notify: Notify::new(),
                 agent: agent::AgentHub::default(),
+                build: build::BuildHub::default(),
                 firewall_gate: Mutex::new(None),
                 app_handle: std::sync::OnceLock::new(),
             });
             let _ = app.state::<AppState>().app_handle.set(app.handle().clone());
+            build::restore(app.handle());
             tauri::async_runtime::spawn(memcmds::worker(app.handle().clone()));
             shutdown::start_watchdog(app.handle());
 
@@ -733,6 +740,22 @@ fn main() {
             memcmds::set_active_project,
             memcmds::reset_learning,
             memcmds::last_time,
+            dataset::rate_message,
+            dataset::edit_reply,
+            dataset::set_example_excluded,
+            dataset::training_examples,
+            dataset::dataset_status,
+            dataset::export_dataset,
+            build::build_overview,
+            build::build_preflight,
+            build::build_start,
+            build::build_pause,
+            build::build_resume,
+            build::build_cancel,
+            build::build_dismiss,
+            build::build_gpu,
+            build::build_report,
+            build::build_make_default,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")

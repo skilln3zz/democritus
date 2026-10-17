@@ -14,6 +14,9 @@ New-Item -ItemType Directory -Force (Join-Path $e2e 'data') | Out-Null
 
 $env:DEMOCRITUS_DATA_DIR = Join-Path $e2e 'data'
 if ($RealHome) { Remove-Item Env:DEMOCRITUS_HOME -ErrorAction SilentlyContinue } else { $env:DEMOCRITUS_HOME = Join-Path $e2e 'home' }
+# Build Democritus: tests use the real training tools (Python environment, student
+# weights, converter) but keep their builds and dataset in the test home.
+$env:DEMOCRITUS_TRAINING_TOOLS = 'D:\Democritus\training'
 # Same privacy flags as the real app (tauri.conf.json), plus the DevTools port.
 $conf = Get-Content (Join-Path $root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "$($conf.app.windows[0].additionalBrowserArgs) --remote-debugging-port=9222 $ExtraArgs".Trim()

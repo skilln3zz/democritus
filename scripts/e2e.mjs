@@ -16,6 +16,8 @@
 //   Coding agent: --only=agent (needs a model with tool calling, qwen3-coder by default; --agent-model=…)
 //   Coding agent attacks: --only=agentattack (prompt injection, path escapes, junction, Lockdown, Stop;
 //               qwen3.5:4b and qwen3.5:9b by default; --agent-models=a,b). "KNOWN GAP" lines fail until fixed.
+//   Build Democritus: --only=build (ratings and edits, the dataset export, and a test run with
+//               qwen3.8:27b as teacher; uses the real training tools, never starts a full build)
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1040,6 +1042,151 @@ async function testAgentAttack(cdp, model) {
   }
 }
 
+// Build Democritus (Steps 6D and 6E). 6D: rate and edit replies in chat, the
+// examples list, leaving one out, the export. 6E: the requirements check and a
+// test run (20 lessons, a few training steps) through every stage, with Pause /
+// Resume and Lockdown during the lessons. Never starts a full build.
+async function testBuild(cdp) {
+  const call = (cmd, a) => cdp.eval(invoke(cmd, a));
+  const paths = await call('app_paths');
+  // Records every page switch, to explain any that the test didn't make.
+  await cdp.eval(`(() => { window.__pageLog = []; new MutationObserver(() => window.__pageLog.push(new Date().toISOString().slice(11, 19) + ' ' + document.querySelector('#app').dataset.page)).observe(document.querySelector('#app'), { attributes: true, attributeFilter: ['data-page'] }); })()`);
+  // Opens the Build page, then presses one of its action buttons.
+  const press = async (act) => {
+    await cdp.eval(`document.querySelector('#app').dataset.page === 'build' || document.querySelector('.rail-btn[data-page=build]').click()`);
+    await waitFor(cdp, `document.querySelector('#bd-actions [data-act=${act}]:not([disabled])')`, 15_000, `${act} button`);
+    await cdp.eval(`document.querySelector('#bd-actions [data-act=${act}]').click()`);
+  };
+
+  // ---- 6D: feedback in chat ----
+  await newChat(cdp);
+  await selectModel(cdp, 'qwen3.5:4b');
+  await typeAndSend(cdp, 'What is the capital of France? Answer in one word.');
+  await awaitReply(cdp, 300_000);
+  await typeAndSend(cdp, 'Suggest a name for a grey cat. Answer in one word.');
+  await awaitReply(cdp, 300_000);
+  const conv = (await call('list_conversations', { query: null }))[0];
+  await cdp.eval(`document.querySelectorAll('#messages .message.assistant')[0].querySelector('.rate-btn[data-rating="1"]').click()`);
+  await waitFor(cdp, `document.querySelectorAll('#messages .message.assistant')[0].querySelector('.rate-btn[data-rating="1"]').getAttribute('aria-pressed') === 'true'`, 5000, 'thumbs up shown');
+  await cdp.eval(`[...document.querySelectorAll('#messages .message.assistant')].pop().querySelector('.edit-reply').click()`);
+  await waitFor(cdp, `document.querySelector('#edit-dialog').open`, 5000, 'edit dialog');
+  await cdp.eval(`(() => { document.querySelector('#edit-text').value = 'Pebble. A grey cat named Pebble sounds soft and calm.'; document.querySelector('#edit-dialog button[value=save]').click(); })()`);
+  await waitFor(cdp, `[...document.querySelectorAll('#messages .message.assistant')].pop().querySelector('.edited-badge')`, 5000, 'edited badge');
+  const shown = await cdp.eval(`[...document.querySelectorAll('#messages .message.assistant')].pop().querySelector('.body').innerText`);
+  const msgs = await call('get_messages', { conversationId: conv.id });
+  const replies = msgs.filter((m) => m.role === 'assistant');
+  report('6D: thumbs up is saved', replies[0].rating === 1, `rating ${replies[0].rating}`);
+  report('6D: edited answer is saved and shown', /Pebble/.test(replies[1].edited ?? '') && /Pebble/.test(shown), shown.slice(0, 80));
+  await cdp.eval(`[...document.querySelectorAll('#messages .message.assistant')].pop().querySelector('.toggle-original').click()`);
+  const original = await cdp.eval(`[...document.querySelectorAll('#messages .message.assistant')].pop().querySelector('.body').innerText`);
+  report('6D: "Show original" shows the model\'s answer', !/Pebble\. A grey cat/.test(original), original.slice(0, 60));
+
+  const examples = await call('training_examples');
+  report('6D: rated and edited replies are examples', examples.length === 2 && examples.some((e) => e.edited) && examples.some((e) => e.rating === 1 && !e.edited), examples.map((e) => `${e.edited ? 'edited' : 'rated'}: ${e.prompt.slice(0, 30)}`).join(' | '));
+
+  // Leave one out on the page, then export.
+  const before = await call('get_operator');
+  await call('save_operator', { settings: { ...before, allowTraining: true, lockdown: false } });
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=operator]').click()`);
+  await sleep(1200);
+  await cdp.eval(`document.querySelector('.rail-btn[data-page=build]').click()`);
+  await waitFor(cdp, `!document.querySelector('#page-build').hidden`, 5000, 'Build page');
+  await cdp.eval(`document.querySelector('#bd-tabs [data-tab=examples]').click()`);
+  await waitFor(cdp, `document.querySelectorAll('#bd-ex-items .bd-ex-item').length === 2`, 10_000, 'examples listed');
+  await cdp.eval(`(() => { const i = document.querySelector('#bd-ex-items .bd-ex-item:not(.excluded) input.switch'); i.click(); })()`);
+  await waitFor(cdp, `document.querySelectorAll('#bd-ex-items .bd-ex-item.excluded').length === 1`, 5000, 'one left out');
+  const m1 = await call('export_dataset');
+  report('6D: export leaves out the excluded example', m1.rated + m1.edited === 1 && m1.excluded === 1 && m1.identity >= 10, JSON.stringify(m1));
+  const file = join(paths.training, 'dataset', m1.file);
+  const lines = existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  report('6D: export file is written to <home>\\training\\dataset', lines.length === m1.rated + m1.edited + m1.identity, file);
+  await cdp.eval(`document.querySelector('#bd-ex-items .bd-ex-item.excluded input.switch').click()`);
+  await waitFor(cdp, `document.querySelectorAll('#bd-ex-items .bd-ex-item.excluded').length === 0`, 5000, 'included again');
+  await screenshot(cdp, 'build-examples');
+
+  // ---- 6E: requirements and a test run ----
+  try {
+    await cdp.eval(`document.querySelector('#bd-tabs [data-tab=build]').click()`);
+    await waitFor(cdp, `!document.querySelector('#bd-setup').hidden && document.querySelector('#bd-teacher option')`, 15_000, 'build setup');
+    const checks = await call('build_preflight', { teacher: 'qwen3.8:27b', testRun: true });
+    for (const c of checks) report(`6E preflight: ${c.label}`, c.ok || c.id === 'converter', `${c.ok ? 'ok' : c.id === 'converter' ? 'missing (not required to start)' : 'FAILED'} · ${c.detail}`);
+    await cdp.eval(`(() => { const s = document.querySelector('#bd-teacher'); s.value = 'qwen3.8:27b'; })()`);
+    await press('test');
+    await waitFor(cdp, `document.querySelector('#confirm-dialog').open`, 120_000, 'test run confirmation');
+    await cdp.eval(`document.querySelector('#confirm-dialog button.primary').click()`);
+    await waitFor(cdp, `${invoke('build_overview')}.then(o => o.current && o.current.status === 'running')`, 30_000, 'build running');
+    await screenshot(cdp, 'build-started');
+
+    const stages = new Set();
+    let pausedOnce = false;
+    let lockedOnce = false;
+    let b = null;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 90 * 60_000) {
+      b = (await call('build_overview')).current;
+      stages.add(b.stage);
+      // Your examples and the self-description ones are written at once; pause during the teacher's.
+      const fixed = b.lessonsFromYou + 12;
+      const teacherLessons = b.stage === 'lessons' && b.lessonsDone >= fixed + 1;
+      if (teacherLessons && !pausedOnce && b.status === 'running') {
+        pausedOnce = true;
+        await press('pause');
+        const p = await waitFor(cdp, `${invoke('build_overview')}.then(o => o.current.status === 'paused' ? o.current : null)`, 600_000, 'paused by you');
+        await sleep(4000);
+        const still = (await call('build_overview')).current;
+        report('6E: Pause stops the build where it is', still.status === 'paused' && still.lessonsDone === p.lessonsDone && p.pauseReason === 'you', `${p.statusText} · ${p.lessonsDone} lessons`);
+        await screenshot(cdp, 'build-paused');
+        await press('resume');
+        await waitFor(cdp, `${invoke('build_overview')}.then(o => o.current.status === 'running')`, 15_000, 'resumed');
+        report('6E: Resume carries on', true, `from lesson ${p.lessonsDone}`);
+      } else if (pausedOnce && !lockedOnce && b.stage === 'lessons' && b.status === 'running' && b.lessonsDone >= Math.min(b.lessonTarget - 1, fixed + 3)) {
+        lockedOnce = true;
+        await call('set_lockdown', { on: true });
+        const l = await waitFor(cdp, `${invoke('build_overview')}.then(o => o.current.status === 'paused' ? o.current : null)`, 600_000, 'paused by Lockdown');
+        // A rejected invoke only shows as "Uncaught (in promise)" over CDP: read the text in the page.
+        const refused = await cdp.eval(`${invoke('build_resume')}.then(() => 'resumed', (e) => String(e))`);
+        report('6E: Lockdown pauses the build and blocks resuming', l.pauseReason === 'lockdown' && /Lockdown/.test(refused), `${l.statusText} · resume: ${refused}`);
+        await call('set_lockdown', { on: false });
+        await call('build_resume');
+        await waitFor(cdp, `${invoke('build_overview')}.then(o => o.current.status === 'running')`, 15_000, 'resumed after Lockdown');
+      }
+      if (b.status !== 'running' && b.status !== 'paused') break;
+      if (b.status === 'paused' && b.pauseReason !== 'heat') break; // shouldn't happen here
+      await sleep(3000);
+    }
+    await cdp.eval(`document.querySelector('.rail-btn[data-page=build]').click()`);
+    await sleep(800);
+    await screenshot(cdp, 'build-end');
+    const dir = join(paths.training, 'builds', b.id);
+    const lessons = existsSync(join(dir, 'lessons.jsonl')) ? readFileSync(join(dir, 'lessons.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+    const bySource = lessons.reduce((acc, l) => ((acc[l.source] = (acc[l.source] ?? 0) + 1), acc), {});
+    report('6E lessons: 20 written (yours, about Democritus, and from the teacher)', lessons.length === 20 && bySource.teacher > 0 && bySource.identity > 0 && bySource.you > 0, JSON.stringify(bySource));
+    report('6E lessons: system prompt names the built model', lessons.every((l) => l.messages[0].role === 'system' && l.messages[0].content.includes(b.name)), b.name);
+    report('6E training: every step ran', b.step === b.steps && b.steps > 0 && existsSync(join(dir, 'adapter', 'adapter_model.safetensors')), `step ${b.step}/${b.steps} · loss ${b.lossStart?.toFixed(2)} → ${b.loss?.toFixed(2)} · ${b.secondsPerStep?.toFixed(1)} s/step · VRAM peak ${((b.vramPeak ?? 0) / 2 ** 30).toFixed(1)} GB`);
+    report('6E training: a checkpoint was saved', !!b.checkpointAt && existsSync(join(dir, 'checkpoint', 'trainer_state.pt')), b.checkpointAt ? new Date(b.checkpointAt).toISOString() : 'none');
+    report('6E packaging', stages.has('testing') || b.status === 'done', b.status === 'failed' ? b.error : `${b.stage} · ${b.statusText}`);
+    report('6E testing and done', b.status === 'done' && !!b.scores, b.scores ? JSON.stringify(b.scores) : `${b.status} at ${b.stage}`);
+    if (b.status === 'done') {
+      const models = await call('list_models');
+      report('6E: built model is in the brain picker', models.some((m) => m.id === b.name), b.name);
+      report('6E: the built model answers (speed measured)', b.scores.studentTps > 0 && b.scores.identity + b.scores.rules + b.scores.everyday + b.scores.coding > 0, `${b.scores.studentTps} tok/s vs teacher ${b.scores.teacherTps} tok/s`);
+      const report_ = await call('build_report', { id: b.id });
+      console.log('      test answers: ' + report_.items.map((i) => `[${i.category}] ${i.studentScore.toFixed(1)} vs ${i.teacherScore.toFixed(1)}: ${i.student.replace(/\s+/g, ' ').slice(0, 90)}`).join('\n                    '));
+      const s = (await call('get_settings')).defaultModel;
+      report('6E: the default brain did not change by itself', s !== b.name, `default: ${s || '(none)'}`);
+    }
+    const log = await call('read_activity', { limit: 300, kind: 'training', query: null });
+    const actions = new Set(log.map((e) => e.action));
+    report('6E log: start, export, pause, lessons and training are logged', ['build started', 'dataset exported', 'build paused', 'build resumed', 'lessons finished', 'training started'].every((a) => actions.has(a)), [...actions].join(' | '));
+    report('6E: stages reached', true, [...stages].join(' → '));
+    console.log('      page switches: ' + ((await cdp.eval('window.__pageLog')) ?? []).join(', '));
+  } finally {
+    await call('set_lockdown', { on: false }).catch(() => {});
+    await call('save_operator', { settings: { ...(await call('get_operator')), allowTraining: false } });
+    await cdp.eval(`document.querySelector('.rail-btn[data-page=chat]').click()`);
+  }
+}
+
 async function testMigration(cdp) {
   const convs = await cdp.eval(invoke('list_conversations', { query: null }));
   const legacy = convs.find((c) => c.title === 'Legacy chat about tomatoes');
@@ -1177,6 +1324,7 @@ try {
   if (ONLY.has('safety')) await testSafety(cdp, fast).catch((e) => report('safety', false, e.message));
   if (ONLY.has('download')) await testDownload(cdp, args.url).catch((e) => report('download', false, e.message));
   if (ONLY.has('agent')) await testAgent(cdp, args['agent-model'] ?? 'qwen3-coder:latest').catch((e) => report('agent', false, e.message));
+  if (ONLY.has('build')) await testBuild(cdp).catch((e) => report('build', false, e.message));
   if (ONLY.has('agentattack')) {
     for (const m of (args['agent-models'] ?? 'qwen3.5:4b,qwen3.5:9b').split(',')) await testAgentAttack(cdp, m).catch((e) => report(`agentattack ${m}`, false, e.message));
   }

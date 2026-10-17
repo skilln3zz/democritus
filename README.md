@@ -14,6 +14,8 @@ Built with [Tauri 2](https://tauri.app): the backend is Rust, and the UI is plai
 - Drag text files into the window to include their contents in your message (up to 1 MB per file).
 - Settings for the system prompt, temperature, max tokens, server URL and server start command.
 - The "Neumorphic off-white" look (design-neumorphic/NEU-SPEC.md): one warm off-white material, with raised cards and buttons, inset fields and selected rows, and a single terracotta accent. **Light, Dark (charcoal) or Follow system**, chosen under Settings & security → Appearance and saved with the other settings.
+- **Feedback on replies**: thumbs up / down and **Edit** under every answer. An edited answer is shown and used from then on (the original is kept).
+- **Build Democritus** (off by default: turn on "Allow fine-tuning" under Settings & safety). Distils a large local model (the teacher, e.g. qwen3.8:27b) into a 4B model of your own, `democritus:4b-vN`, from your rated and edited answers and the teacher's answers to your questions: lessons, QLoRA training on the GPU, packaging for Ollama (8-bit GGUF via llama.cpp's converter), and a test against the teacher. Pause, resume, cancel; it pauses itself above 83 °C and under Lockdown, keeps the PC awake overnight, and never changes the default brain on its own. Needs the training tools in `<home>\training` (see HANDOFF.md).
 - A **coding agent** (Code page, off by default: turn on "Coding agent" under Settings & safety). Pick a project folder and describe a change; the brain lists, reads and searches files in that folder, then proposes each edit as a diff. Nothing is written until you press **Apply**, and the old version is backed up to `<home>\backups\agent\`. It can't leave the folder, run commands or reach the internet. Needs Ollama and a model with tool calling (qwen3-coder works best).
 - A **Security check** under Settings & safety: whether Ollama listens only on 127.0.0.1, whether `OLLAMA_HOST` is local, Windows Firewall outbound block rules for Democritus and Ollama, the Ollama version, Lockdown and download permission, and whether model files are only `.gguf` / `.safetensors`. Fix buttons show the exact PowerShell commands and run nothing until you confirm.
 - A server status indicator. The app starts the model server if it isn't running, and stops it on exit **only if the app started it**.
@@ -142,6 +144,7 @@ src/                 UI (TypeScript, no framework)
   orb.ts             the ferrofluid thinking orb (canvas)
   styles.css         theme tokens, shadow recipes and layout (design-neumorphic/NEU-SPEC.md)
   codepage.ts        the Code page (coding agent)
+  buildpage.ts       the Build Democritus page (status, stages, capabilities, your examples)
 src-tauri/src/
   main.rs            Tauri commands, streaming over an IPC channel, cancellation
   llm.rs             OpenAI-compatible client, SSE parsing, friendly errors
@@ -151,6 +154,9 @@ src-tauri/src/
   security.rs        Security check commands (secrules.rs: the pure, unit-tested rules)
   agent.rs           coding agent loop and commands (agentcore.rs: tools and parsing, unit-tested)
   workspace.rs       the agent's file access: stays inside one folder, plans and applies edits
+  dataset.rs         ratings, edited answers and the training dataset export (Step 6D)
+  build.rs           Build Democritus: stages, the training worker, pause/resume, heat (buildcore.rs: pure parts)
+src-tauri/python/democritus_train.py   the QLoRA training worker (built into the app)
 scripts/e2e.mjs      end-to-end tests over the DevTools protocol
 design/              UI design handoff (design/assets keeps the old split-face icon as history)
 democritus-icon-1024.png  the app icon: npx tauri icon democritus-icon-1024.png, then copy
