@@ -6,10 +6,10 @@ use std::sync::atomic::Ordering;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::operator::{self, Approval, OperatorSettings};
-use crate::{activity, home, internet, AppState};
+use crate::{activity, home, internet, security, AppState};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -59,6 +59,12 @@ pub fn apply_operator(state: &AppState, next: OperatorSettings) -> CmdResult<Ope
             // Drop anything waiting for approval and abort a running download.
             state.approvals.clear();
             state.download_cancel.notify_waiters();
+            // A firewall rule switched off for a download that's waiting for its
+            // second approval goes back on now. (A running download closes its
+            // own when it's cancelled.)
+            if let Some((_, gate)) = take_gate(state, None) {
+                close_in_background(state, gate, "Lockdown");
+            }
             state.log("security", "Lockdown ON: internet blocked, learning and memory writes paused", json!({}));
         } else {
             state.log("security", "Lockdown OFF", json!({}));
@@ -135,6 +141,49 @@ pub enum ApprovalOutcome {
 pub struct Progress {
     done: u64,
     total: Option<u64>,
+    /// What's happening besides bytes, e.g. waiting for the admin prompt.
+    stage: Option<String>,
+}
+
+fn stage(text: &str) -> Progress {
+    Progress { done: 0, total: None, stage: Some(text.into()) }
+}
+
+/// How long the rule may stay off while the second (download) dialog waits.
+const GATE_DIALOG_MINUTES: u64 = 10;
+
+/// Takes the open firewall gate: any gate (key None), or only the one that
+/// belongs to this download approval.
+fn take_gate(state: &AppState, key: Option<&str>) -> Option<(String, security::FirewallGate)> {
+    let mut g = state.firewall_gate.lock().unwrap_or_else(|p| p.into_inner());
+    if key.is_none() || g.as_ref().is_some_and(|(k, _)| Some(k.as_str()) == key) {
+        g.take()
+    } else {
+        None
+    }
+}
+
+/// Switches the rule back on from a synchronous context (Lockdown, expiry).
+fn close_in_background(state: &AppState, gate: security::FirewallGate, why: &'static str) {
+    security::signal_gate_done(&gate);
+    if let Some(handle) = state.app_handle.get().cloned() {
+        tauri::async_runtime::spawn(async move {
+            let st = handle.state::<AppState>();
+            security::close_gate(&st, gate, why).await;
+        });
+    }
+}
+
+/// Switches Democritus's own firewall rule off (one admin prompt) unless a
+/// gate is already open or there's no rule.
+async fn ensure_gate(state: &AppState, approval: &Approval, on_progress: &Channel<Progress>) -> CmdResult<Option<security::FirewallGate>> {
+    if let Some((_, gate)) = take_gate(state, Some(&approval.id)) {
+        return Ok(Some(gate));
+    }
+    let _ = on_progress.send(stage("Waiting for the Windows administrator prompt to switch off Democritus's firewall rule for this download…"));
+    let gate = security::open_gate(state, &approval.id, &approval.url).await?;
+    let _ = on_progress.send(stage(if gate.is_some() { "Firewall rule switched off for this download." } else { "" }));
+    Ok(gate)
 }
 
 /// The operator's answer to an approval dialog. Each approval works exactly once.
@@ -144,21 +193,39 @@ pub async fn respond_approval(state: State<'_, AppState>, id: String, approve: b
     let summary = serde_json::to_value(&approval).unwrap_or_default();
     if !approve {
         state.log("approval", "denied", summary);
+        if let Some((_, gate)) = take_gate(&state, Some(&approval.id)) {
+            security::close_gate(&state, gate, "download denied").await;
+        }
         return Ok(ApprovalOutcome::Denied);
     }
     state.log("approval", "approved", summary);
     // Re-check everything at the moment of use: settings may have changed.
-    let op = internet_allowed(&state)?;
-    operator::validate_download_url(&approval.url, &op.download_allowlist)?;
+    let checked = internet_allowed(&state).and_then(|op| operator::validate_download_url(&approval.url, &op.download_allowlist).map(|_| ()));
+    if let Err(e) = checked {
+        if let Some((_, gate)) = take_gate(&state, Some(&approval.id)) {
+            security::close_gate(&state, gate, "refused").await;
+        }
+        return Err(e);
+    }
     let log_request = |method: &str, url: &str, status: u16| {
         state.log("network", "internet request", json!({ "method": method, "url": url, "status": status }));
     };
 
     match approval.kind.as_str() {
         "lookup" => {
-            let found = internet::lookup(&state.internet, &approval.url, log_request).await.inspect_err(|e| {
-                state.log("network", "lookup failed", json!({ "url": approval.url, "error": e }));
-            })?;
+            // The lookup is already internet access: the rule goes off now and
+            // stays off only until the download ends (or is denied / expires).
+            let gate = ensure_gate(&state, &approval, &on_progress).await?;
+            let found = match internet::lookup(&state.internet, &approval.url, log_request).await {
+                Ok(f) => f,
+                Err(e) => {
+                    state.log("network", "lookup failed", json!({ "url": approval.url, "error": e }));
+                    if let Some(g) = gate {
+                        security::close_gate(&state, g, "lookup failed").await;
+                    }
+                    return Err(e);
+                }
+            };
             let next = state.approvals.create(Approval {
                 kind: "download".into(),
                 size_bytes: found.size_bytes,
@@ -167,9 +234,27 @@ pub async fn respond_approval(state: State<'_, AppState>, id: String, approve: b
                 ..approval
             });
             state.log("approval", "approval requested", serde_json::to_value(&next).unwrap_or_default());
+            if let Some(g) = gate {
+                *state.firewall_gate.lock().unwrap_or_else(|p| p.into_inner()) = Some((next.id.clone(), g));
+                // If the second dialog isn't answered in time, the rule goes back on.
+                if let Some(handle) = state.app_handle.get().cloned() {
+                    let next_id = next.id.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(GATE_DIALOG_MINUTES * 60)).await;
+                        let st = handle.state::<AppState>();
+                        if st.approvals.take(&next_id).is_some() {
+                            st.log("approval", "expired", json!({ "id": next_id }));
+                        }
+                        if let Some((_, gate)) = take_gate(&st, Some(&next_id)) {
+                            security::close_gate(&st, gate, "download approval expired").await;
+                        }
+                    });
+                }
+            }
             Ok(ApprovalOutcome::NeedsApproval { approval: next })
         }
         "download" => {
+            let gate = ensure_gate(&state, &approval, &on_progress).await?;
             let dest = home::downloads_dir(&state.home());
             state.log("download", "started", json!({ "url": approval.url, "file": approval.file_name, "to": dest.display().to_string() }));
             let mut last_sent = 0u64;
@@ -182,12 +267,22 @@ pub async fn respond_approval(state: State<'_, AppState>, id: String, approve: b
                 |done, total| {
                     if done - last_sent >= 4 * 1024 * 1024 || Some(done) == total {
                         last_sent = done;
-                        let _ = on_progress.send(Progress { done, total });
+                        let _ = on_progress.send(Progress { done, total, stage: None });
                     }
                 },
                 log_request,
             )
             .await;
+            // Finished, failed or cancelled: the rule goes back on right away.
+            if let Some(g) = gate {
+                let _ = on_progress.send(stage("Switching Democritus's firewall rule back on…"));
+                let why = match &result {
+                    Ok(_) => "download finished",
+                    Err(e) if e.contains("cancel") => "download cancelled",
+                    Err(_) => "download failed",
+                };
+                security::close_gate(&state, g, why).await;
+            }
             match result {
                 Ok(r) => {
                     state.log(

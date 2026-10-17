@@ -226,6 +226,25 @@ fn check_ollama_host(port: u16) -> CheckItem {
 
 fn check_firewall() -> CheckItem {
     let title = "Firewall blocks Democritus and Ollama from the internet".to_string();
+    // Democritus's own rule switched off (a download was interrupted, or by
+    // hand): offer to switch it back on, never to create a second rule.
+    if let Ok(OwnRuleState::Off(names)) = own_rules_now().map(|r| own_rule_state(&r)) {
+        return CheckItem {
+            id: "firewall",
+            title,
+            status: "bad",
+            detail: "Democritus's own firewall rule exists but is switched off, so Democritus is not blocked from the internet. \
+                     This happens if a download was interrupted (crash or power loss) or if it was switched off by hand."
+                .into(),
+            fix: enable_command(&names).ok().map(|c| Fix {
+                id: "firewall_enable",
+                label: "Re-enable rule".into(),
+                commands: vec![c],
+                admin: true,
+                note: "Switches Democritus's own rule back on. Ollama's rules are not touched.".into(),
+            }),
+        };
+    }
     match firewall_plan() {
         Err(e) => CheckItem { id: "firewall", title, status: "unknown", detail: e, fix: None },
         Ok((targets, commands)) => {
@@ -246,8 +265,9 @@ fn check_firewall() -> CheckItem {
                 commands,
                 admin: true,
                 note: "The rules block every address except 127.0.0.1 and ::1, so chat with the local model keeps working. \
-                       Approved model downloads from the Operator page will fail while the Democritus rule is on; \
-                       you can switch it off in Windows Defender Firewall (group \"Democritus\")."
+                       When you approve a model download, Democritus switches off only its own rule for that download \
+                       (one Windows administrator prompt) and switches it back on as soon as the download ends. \
+                       Ollama's rules stay on."
                     .into(),
             });
             CheckItem { id: "firewall", title, status: if missing.is_empty() { "ok" } else { "bad" }, detail, fix }
@@ -345,7 +365,11 @@ pub async fn security_check(state: State<'_, AppState>) -> CmdResult<Vec<CheckIt
 pub async fn security_fix(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let port = port_of(&state.settings().base_url);
     let fix = match id.as_str() {
-        "firewall" => tauri::async_runtime::spawn_blocking(check_firewall).await.map_err(|e| e.to_string())?.fix,
+        "firewall" | "firewall_enable" => tauri::async_runtime::spawn_blocking(check_firewall)
+            .await
+            .map_err(|e| e.to_string())?
+            .fix
+            .filter(|f| f.id == id),
         "ollama_host" => tauri::async_runtime::spawn_blocking(move || ollama_host_fix(port)).await.map_err(|e| e.to_string())?,
         _ => return Err(format!("Unknown fix \"{id}\".")),
     };
@@ -356,6 +380,160 @@ pub async fn security_fix(state: State<'_, AppState>, id: String) -> CmdResult<(
     let result = tauri::async_runtime::spawn_blocking(move || run_fix(&commands, admin)).await.map_err(|e| e.to_string())?;
     state.log("security", if result.is_ok() { "security fix done" } else { "security fix failed" }, json!({ "fix": fix.id, "error": result.as_ref().err() }));
     result
+}
+
+// ---------- the download exception: Democritus's own rule off during a download ----------
+
+/// Democritus's own outbound block rules, as Windows reports them now.
+pub fn own_rules_now() -> CmdResult<Vec<FwRule>> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        Ok(own_rules(&parse_fw_rules(&powershell(LIST_RULES_SCRIPT)?), &exe))
+    }
+    #[cfg(not(windows))]
+    Ok(Vec::new())
+}
+
+/// An open off-window for Democritus's rule, held by the elevated helper.
+pub struct FirewallGate {
+    pub dir: PathBuf,
+    pub names: Vec<String>,
+}
+
+const GATE_MAX_MINUTES: u32 = 240;
+
+/// Starts the helper elevated and returns as soon as Windows has accepted the
+/// prompt (the helper keeps running on its own).
+fn start_elevated(script: &str) -> CmdResult<()> {
+    #[cfg(windows)]
+    {
+        let outer = format!(
+            "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','{}'",
+            encode_command(script)
+        );
+        powershell(&outer).map(|_| ()).map_err(|e| {
+            if e.to_lowercase().contains("cancel") {
+                "Cancelled at the Windows administrator prompt. The firewall rule stays on, so nothing was downloaded.".into()
+            } else {
+                format!("Couldn't start the firewall helper: {e}")
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = script;
+        Err("Firewall rules can only be switched on Windows.".into())
+    }
+}
+
+/// After the operator approved internet access: switches off ONLY Democritus's
+/// own rule (one admin prompt). Returns None when there's nothing to switch.
+pub async fn open_gate(state: &AppState, approval_id: &str, url: &str) -> CmdResult<Option<FirewallGate>> {
+    let own = tauri::async_runtime::spawn_blocking(own_rules_now).await.map_err(|e| e.to_string())??;
+    match download_plan(&own) {
+        DownloadFirewallPlan::NothingToDo => Ok(None),
+        DownloadFirewallPlan::AlreadyOff => {
+            state.log("security", "firewall: Democritus rule is already switched off; left as it is", json!({ "url": url }));
+            Ok(None)
+        }
+        DownloadFirewallPlan::SwitchOff(names) => {
+            let dir = state.home().join(".firewall").join(approval_id);
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let script = toggle_script(&names, &dir, std::process::id(), GATE_MAX_MINUTES)?;
+            state.log("security", "firewall: switching off Democritus's rule for an approved download (admin prompt)", json!({ "rules": names, "url": url }));
+            let s = script.clone();
+            if let Err(e) = tauri::async_runtime::spawn_blocking(move || start_elevated(&s)).await.map_err(|e| e.to_string())? {
+                state.log("security", "firewall: admin prompt declined or failed; rule stays on", json!({ "error": e }));
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
+            }
+            let off = dir.join("off");
+            let ok = tauri::async_runtime::spawn_blocking(move || wait_for_file(&off, std::time::Duration::from_secs(90))).await.unwrap_or(false);
+            if !ok {
+                let _ = std::fs::write(dir.join("done"), "done"); // let a late helper finish and re-enable
+                state.log("security", "firewall: helper didn't confirm the rule was switched off", json!({ "rules": names }));
+                return Err("Windows didn't confirm that the firewall rule was switched off. Nothing was downloaded.".into());
+            }
+            state.log("security", "firewall: Democritus rule switched off", json!({ "rules": names }));
+            Ok(Some(FirewallGate { dir, names }))
+        }
+    }
+}
+
+/// Ends the off-window: the helper switches the rule back on; then the state
+/// is checked again and logged.
+pub async fn close_gate(state: &AppState, gate: FirewallGate, why: &str) {
+    let _ = std::fs::write(gate.dir.join("done"), why);
+    let on = gate.dir.join("on");
+    let signalled = tauri::async_runtime::spawn_blocking(move || wait_for_file(&on, std::time::Duration::from_secs(60))).await.unwrap_or(false);
+    let now = tauri::async_runtime::spawn_blocking(own_rules_now).await.ok().and_then(|r| r.ok()).map(|r| own_rule_state(&r));
+    match (signalled, now) {
+        (true, Some(OwnRuleState::AllOn)) => state.log("security", "firewall: Democritus rule switched back on", json!({ "rules": gate.names, "after": why })),
+        _ => state.log(
+            "security",
+            "firewall: could NOT confirm the Democritus rule is back on; see the Security check",
+            json!({ "rules": gate.names, "after": why }),
+        ),
+    }
+    let _ = std::fs::remove_dir_all(&gate.dir);
+}
+
+/// For the app's exit: tell a running helper to switch the rule back on now.
+pub fn signal_gate_done(gate: &FirewallGate) {
+    let _ = std::fs::write(gate.dir.join("done"), "app exit");
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirewallStatus {
+    /// none | on | off | unknown
+    pub state: &'static str,
+    pub detail: String,
+}
+
+pub fn firewall_status_now() -> FirewallStatus {
+    match own_rules_now().map(|r| own_rule_state(&r)) {
+        Ok(OwnRuleState::NoRule) => FirewallStatus { state: "none", detail: "No Democritus firewall rule (create one in the Security check).".into() },
+        Ok(OwnRuleState::AllOn) => FirewallStatus { state: "on", detail: "Democritus's firewall rule is on.".into() },
+        Ok(OwnRuleState::Off(_)) => FirewallStatus {
+            state: "off",
+            detail: "Democritus's firewall rule is switched off, so Democritus is not blocked from the internet. \
+                     A download may have been interrupted (crash or power loss)."
+                .into(),
+        },
+        Err(e) => FirewallStatus { state: "unknown", detail: e },
+    }
+}
+
+/// Runs at every app start (crash safety).
+pub async fn startup_firewall_check(state: &AppState) -> FirewallStatus {
+    let s = tauri::async_runtime::spawn_blocking(firewall_status_now).await.unwrap_or(FirewallStatus { state: "unknown", detail: String::new() });
+    if s.state == "off" {
+        state.log("security", "startup: Democritus firewall rule is switched off", json!({ "detail": s.detail }));
+    }
+    s
+}
+
+#[tauri::command]
+pub async fn firewall_status() -> CmdResult<FirewallStatus> {
+    tauri::async_runtime::spawn_blocking(firewall_status_now).await.map_err(|e| e.to_string())
+}
+
+/// The startup warning's "Re-enable" button. The command is rebuilt here from
+/// the rules Windows reports, never taken from the window.
+#[tauri::command]
+pub async fn firewall_reenable(state: State<'_, AppState>) -> CmdResult<FirewallStatus> {
+    let own = tauri::async_runtime::spawn_blocking(own_rules_now).await.map_err(|e| e.to_string())??;
+    let OwnRuleState::Off(names) = own_rule_state(&own) else {
+        return Ok(tauri::async_runtime::spawn_blocking(firewall_status_now).await.map_err(|e| e.to_string())?);
+    };
+    let cmd = enable_command(&names)?;
+    state.log("security", "firewall: re-enable Democritus rule confirmed (admin prompt)", json!({ "command": cmd }));
+    let result = tauri::async_runtime::spawn_blocking(move || run_fix(&[cmd], true)).await.map_err(|e| e.to_string())?;
+    let after = tauri::async_runtime::spawn_blocking(firewall_status_now).await.map_err(|e| e.to_string())?;
+    state.log("security", if after.state == "on" { "firewall: Democritus rule re-enabled" } else { "firewall: re-enable failed" }, json!({ "error": result.as_ref().err(), "state": after.state }));
+    result.map(|_| after)
 }
 
 fn run_fix(commands: &[String], admin: bool) -> CmdResult<()> {

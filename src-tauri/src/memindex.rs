@@ -223,10 +223,20 @@ pub fn search_vector(conn: &Connection, model: &str, query: &[f32], limit: usize
     Ok(hits)
 }
 
-/// Reciprocal rank fusion of keyword and meaning results.
-pub fn fuse(lists: &[Vec<Hit>], limit: usize) -> Vec<Hit> {
+/// Rank constant for fusion. The usual 60 is meant for long result lists; the
+/// memory index has a few dozen passages, and at 60 a passage that every
+/// keyword list catches (common words match almost everything) beat the best
+/// meaning match.
+const FUSE_K: f64 = 5.0;
+/// Weight of the meaning list against the keyword list. Questions are worded
+/// unlike the notes that answer them; exact names and terms still win through
+/// the keyword list.
+pub const MEANING_WEIGHT: f64 = 2.0;
+
+/// Weighted reciprocal rank fusion of keyword and meaning results.
+pub fn fuse(lists: &[(Vec<Hit>, f64)], limit: usize) -> Vec<Hit> {
     let mut scores: HashMap<(String, String, String), (f64, Hit)> = HashMap::new();
-    for list in lists {
+    for (list, weight) in lists {
         // Each list counts a passage once, at its best rank (duplicated text in
         // a file must not add up).
         let mut seen = std::collections::HashSet::new();
@@ -236,7 +246,7 @@ pub fn fuse(lists: &[Vec<Hit>], limit: usize) -> Vec<Hit> {
             if !seen.insert(key.clone()) {
                 continue;
             }
-            let add = 1.0 / (60.0 + rank as f64 + 1.0);
+            let add = weight / (FUSE_K + rank as f64 + 1.0);
             rank += 1;
             scores.entry(key).and_modify(|e| e.0 += add).or_insert((add, h.clone()));
         }
@@ -314,8 +324,18 @@ mod tests {
         let hits = search_vector(&conn, "m", &[0.0, 1.0, 0.0], 3).unwrap();
         assert!((hits[0].score - 1.0).abs() < 1e-6);
         let h = |p: &str| Hit { path: p.into(), heading: String::new(), text: p.into(), score: 0.0 };
-        let fused = fuse(&[vec![h("x"), h("y")], vec![h("y"), h("z")]], 3);
+        let fused = fuse(&[(vec![h("x"), h("y")], 1.0), (vec![h("y"), h("z")], 1.0)], 3);
         assert_eq!(fused[0].path, "y", "found by both lists ranks first");
+        // The best meaning match beats a passage that every keyword search
+        // catches low down and meaning ranks low too (seen on Windows: "What
+        // database did we choose…" put the Decisions section 11th).
+        let keyword = (vec![h("a"), h("b"), h("c"), h("d"), h("noise")], 1.0);
+        let meaning = (vec![h("answer"), h("e"), h("f"), h("g"), h("h"), h("noise")], MEANING_WEIGHT);
+        assert_eq!(fuse(&[keyword, meaning], 3)[0].path, "answer");
+        // An exact keyword match that meaning also ranks first stays first.
+        let keyword = (vec![h("exact"), h("a")], 1.0);
+        let meaning = (vec![h("exact"), h("b")], MEANING_WEIGHT);
+        assert_eq!(fuse(&[keyword, meaning], 3)[0].path, "exact");
         let _ = std::fs::remove_dir_all(mem);
     }
 }

@@ -152,6 +152,7 @@ src-tauri/src/
   agent.rs           coding agent loop and commands (agentcore.rs: tools and parsing, unit-tested)
   workspace.rs       the agent's file access: stays inside one folder, plans and applies edits
 scripts/e2e.mjs      end-to-end tests over the DevTools protocol
-design/              UI design handoff; icons come from design/assets/democritus-icon-1024.png
-                     (npx tauri icon design/assets/democritus-icon-1024.png)
+design/              UI design handoff (design/assets keeps the old split-face icon as history)
+democritus-icon-1024.png  the app icon: npx tauri icon democritus-icon-1024.png, then copy
+                     src-tauri/icons/128x128@2x.png to src/assets/democritus-256.png
 ```

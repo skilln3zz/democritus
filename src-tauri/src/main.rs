@@ -20,6 +20,7 @@ mod safety_cmds;
 mod secrules;
 mod security;
 mod server;
+mod shutdown;
 mod sysmem;
 mod think;
 mod workspace;
@@ -55,6 +56,11 @@ pub struct AppState {
     memory_notify: Notify,
     /// The coding agent's tasks and pending edit approvals.
     agent: agent::AgentHub,
+    /// Democritus's firewall rule switched off for an approved download, keyed
+    /// by the download approval it belongs to.
+    firewall_gate: Mutex<Option<(String, security::FirewallGate)>>,
+    /// For background tasks started from synchronous commands.
+    app_handle: std::sync::OnceLock<tauri::AppHandle>,
 }
 
 impl AppState {
@@ -392,7 +398,10 @@ pub(crate) async fn chat_num_ctx(state: &AppState, model: &str) -> Option<u32> {
     Some(want.min(limit).max(2048))
 }
 
-const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}"#;
+// The prompt asks for about 300 words; the length limits keep a looping model
+// from filling the whole window.
+const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string","maxLength":4000}},"required":["summary"]}"#;
+const SUMMARY_NUM_PREDICT: u32 = 1536;
 
 /// Folds `turns` into the conversation's running summary with the current brain.
 async fn summarize(state: &AppState, model: &str, num_ctx: u32, previous: &str, turns: &[context::Turn]) -> CmdResult<String> {
@@ -405,7 +414,7 @@ async fn summarize(state: &AppState, model: &str, num_ctx: u32, previous: &str, 
         json!({ "url": format!("{}/api/chat", ollama::origin(&base)), "model": model, "purpose": "summarize older messages", "messages": turns.len() }),
     );
     let schema: Value = serde_json::from_str(SUMMARY_SCHEMA).expect("valid schema");
-    let v = ollama::chat_json(&state.http, &base, model, &messages, &schema, Some(num_ctx), "5m").await?;
+    let v = ollama::chat_json(&state.http, &base, model, &messages, &schema, Some(num_ctx), SUMMARY_NUM_PREDICT, "5m").await?;
     let summary = v["summary"].as_str().unwrap_or_default().trim().to_string();
     if summary.is_empty() {
         return Err(format!("{model} returned an empty summary"));
@@ -603,8 +612,12 @@ fn main() {
                 lockdown: std::sync::atomic::AtomicBool::new(lockdown),
                 memory_notify: Notify::new(),
                 agent: agent::AgentHub::default(),
+                firewall_gate: Mutex::new(None),
+                app_handle: std::sync::OnceLock::new(),
             });
+            let _ = app.state::<AppState>().app_handle.set(app.handle().clone());
             tauri::async_runtime::spawn(memcmds::worker(app.handle().clone()));
+            shutdown::start_watchdog(app.handle());
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -612,6 +625,13 @@ fn main() {
                 let s = state.settings();
                 let op = state.operator();
                 state.log("security", "app started", json!({ "home": state.home().display().to_string(), "lockdown": op.lockdown }));
+                // Crash safety: a download interrupted by a crash or power loss can
+                // leave Democritus's firewall rule switched off. Warn at once.
+                let fw = security::startup_firewall_check(&state).await;
+                if fw.state == "off" {
+                    use tauri::Emitter;
+                    let _ = handle.emit("firewall-warning", &fw);
+                }
                 if s.auto_start_server {
                     let _ = state.server.ensure_running(&state.http, &s.base_url, &s.server_command).await;
                 }
@@ -649,6 +669,8 @@ fn main() {
             agent::agent_respond,
             agent::agent_stop,
             agent::agent_forget,
+            security::firewall_status,
+            security::firewall_reenable,
             memcmds::memory_overview,
             memcmds::memory_read,
             memcmds::memory_write,
@@ -671,11 +693,20 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Democritus")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.server.shutdown();
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => shutdown::cleanup(app, "normal exit"),
+            // Test hook (debug builds only): DEMOCRITUS_TEST_PREVENT_EXIT=once|always
+            // blocks Tauri's own exit, the way the shutdown hang did, so the
+            // watchdog in shutdown.rs can be tested on demand.
+            #[cfg(debug_assertions)]
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                static PREVENTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                match std::env::var("DEMOCRITUS_TEST_PREVENT_EXIT").as_deref() {
+                    Ok("always") => api.prevent_exit(),
+                    Ok("once") if !PREVENTED.swap(true, std::sync::atomic::Ordering::SeqCst) => api.prevent_exit(),
+                    _ => {}
                 }
             }
+            _ => {}
         });
 }

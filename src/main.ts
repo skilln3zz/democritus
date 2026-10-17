@@ -28,7 +28,7 @@ import { initOperatorPage, loadOperator } from './operatorpage';
 import { fillOrnaments, sparkle, starburst } from './ornaments';
 import { currentPage, initRail, showPage } from './pages';
 import { initCodePage } from './codepage';
-import { initSecurityCheck } from './securitypage';
+import { initFirewallWarning, initSecurityCheck } from './securitypage';
 import { applyTheme, initThemeSwitch, type ThemePref } from './theme';
 import { $, askConfirm, askText, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
 
@@ -1289,6 +1289,7 @@ async function init() {
   initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
   initSecurityCheck();
   initCodePage({ ensureModelFits, defaultModel: () => state.settings?.defaultModel ?? '' });
+  initFirewallWarning();
   onPendingChange((n) => {
     pendingUpdates = n;
     renderReviewChip();
