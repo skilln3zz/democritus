@@ -11,6 +11,7 @@ import {
   type BuildSummary,
   type Conversation,
   type LoadedModel,
+  type MemoryInfo,
   type Message,
   type ModelInfo,
   type ContextReport,
@@ -25,8 +26,9 @@ import { icons, logo } from './icons';
 import { initLogPage } from './logpage';
 import { listen } from '@tauri-apps/api/event';
 import { initMemoryPage, onPendingChange } from './memorypage';
-import { initOperatorPage, loadOperator } from './operatorpage';
-import { Orb } from './orb';
+import { initOperatorPage, loadOperator, onOperatorChange } from './operatorpage';
+import { CHAT_TUNING, FerroOrb } from './orb';
+import { closeMenu, initMenu, onMenuOpen } from './menu';
 import { currentPage, initRail, showPage } from './pages';
 import { initCodePage } from './codepage';
 import { initBuildPage } from './buildpage';
@@ -86,15 +88,8 @@ const els = {
   toasts: $('#toasts'),
   convTitle: $('#conv-title'),
   convSub: $('#conv-sub'),
-  contState: $('#cont-state'),
-  contNext: $('#cont-next'),
-  contStepsWrap: $('#cont-steps-wrap'),
-  contStepsHead: $('#cont-steps-head'),
-  contDial: $('#cont-dial'),
-  contDialText: $('#cont-dial-text'),
-  contStepNow: $('#cont-step-now'),
-  contStepNext: $('#cont-step-next'),
   contRecalled: $('#cont-recalled'),
+  codeOpen: $<HTMLButtonElement>('#code-open'),
   attach: $<HTMLButtonElement>('#attach'),
   attachInput: $<HTMLInputElement>('#attach-input'),
 };
@@ -117,7 +112,7 @@ interface Generation {
   /** Progress shown before the first token (e.g. "Summarizing…"). */
   statusText: string;
   /** The thinking orb beside this reply (not in "Show thoughts" mode). */
-  orb: Orb | null;
+  orb: FerroOrb | null;
   /** Thinking pieces so far (about one token each), and when thinking started and ended. */
   thoughts: number;
   thinkStart: number | null;
@@ -235,41 +230,50 @@ function renderLoaded() {
 
 // Free RAM/VRAM runs nvidia-smi, so the figure is reused for half a minute
 // unless the operator asks for a fresh look.
-let memCache: { at: number; text: string } | null = null;
+let memCache: { at: number; info: MemoryInfo } | null = null;
 
-async function memoryLine(fresh: boolean): Promise<string> {
-  if (!fresh && memCache && Date.now() - memCache.at < 30_000) return memCache.text;
+async function memoryFigures(fresh: boolean): Promise<MemoryInfo | null> {
+  if (!fresh && memCache && Date.now() - memCache.at < 30_000) return memCache.info;
   try {
     const info = await api.memoryInfo();
-    const text =
-      `RAM ${formatMem(info.freeRam)} free of ${formatMem(info.totalRam)}` +
-      (info.totalVram != null ? ` · VRAM ${formatMem(info.freeVram ?? 0)} free of ${formatMem(info.totalVram)}` : '');
-    memCache = { at: Date.now(), text };
-    return text;
+    memCache = { at: Date.now(), info };
+    return info;
   } catch {
-    return ''; // memory figures are optional
+    return null; // memory figures are optional
   }
+}
+
+/** One RAM or VRAM bar: used of total, with the free amount for screen readers and on hover. */
+function memBar(label: string, free: number, total: number): string {
+  const used = Math.max(0, total - free);
+  const pct = total ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  const text = `${label} ${formatMem(free)} free of ${formatMem(total)}`;
+  return (
+    `<div class="mem-row" title="${text}"><span class="mem-row-head"><span>${label}</span><span class="mono">${formatMem(used).replace(/ GB$/, '')} / ${formatMem(total)}</span></span>` +
+    `<span class="mem-track" role="img" aria-label="${text}"><span style="width:${pct}%"></span></span></div>`
+  );
 }
 
 async function renderLoadedPanel(fresh = false) {
   const connected = state.server?.state === 'connected';
   const helper = state.settings?.memoryHelperModel;
   const rows = state.loaded.map((m) => {
-    const gpu = m.sizeBytes ? Math.min(100, Math.round((m.vramBytes / m.sizeBytes) * 100)) : 0;
-    const where = gpu >= 100 ? '100% GPU' : gpu === 0 ? 'CPU only' : `${gpu}% GPU / ${100 - gpu}% CPU`;
+    const onGpu = Math.min(m.sizeBytes, m.vramBytes);
+    const inRam = Math.max(0, m.sizeBytes - m.vramBytes);
+    const where = inRam === 0 ? 'all on the GPU' : onGpu === 0 ? 'all in RAM' : `${formatMem(onGpu).replace(/ GB$/, '')} on GPU, ${formatMem(inRam).replace(/ GB$/, '')} in RAM`;
     const role = m.name === helper ? ' · helper' : '';
     return (
-      `<div class="loaded-row"><div class="loaded-top"><span class="loaded-name mono">${escapeText(m.name)}</span><span class="mono">${formatMem(m.sizeBytes)}</span></div>` +
-      `<div class="mem-bar" role="img" aria-label="${where}"><span class="gpu" style="width:${gpu}%"></span><span class="ram" style="width:${100 - gpu}%"></span></div>` +
-      `<div class="caps muted loaded-split"><span>GPU ${formatMem(m.vramBytes)}</span><span>RAM ${formatMem(Math.max(0, m.sizeBytes - m.vramBytes))}</span></div>` +
-      `<div class="loaded-bottom"><span class="muted small">${escapeText(where)}${m.contextLength ? ` · ${m.contextLength.toLocaleString()} ctx` : ''}${role}</span>` +
-      `<button type="button" class="btn small unload-btn" data-model="${escapeText(m.name)}">Unload</button></div></div>`
+      `<div class="loaded-row"><span class="loaded-text"><span class="loaded-name mono">${escapeText(m.name)}</span>` +
+      `<span class="menu-desc">${formatMem(m.sizeBytes)} · ${escapeText(where)}${role}</span></span>` +
+      `<button type="button" class="btn small unload-btn" data-model="${escapeText(m.name)}">Unload</button></div>`
     );
   });
-  const mem = connected ? await memoryLine(fresh) : '';
+  const info = connected ? await memoryFigures(fresh) : null;
   const empty = connected ? 'None. A model loads when you send a message.' : 'The model server is not connected.';
-  els.loadedPanel.innerHTML =
-    (rows.length ? rows.join('') : `<div class="muted small">${empty}</div>`) + (mem ? `<div class="popover-foot muted small">${mem}</div>` : '');
+  const bars = info
+    ? `<div class="mem-bars">${memBar('RAM', info.freeRam, info.totalRam)}${info.totalVram != null ? memBar('VRAM', info.freeVram ?? 0, info.totalVram) : ''}</div>`
+    : '';
+  els.loadedPanel.innerHTML = (rows.length ? rows.join('') : `<div class="menu-desc">${empty}</div>`) + bars;
 }
 
 async function unloadModel(model: string, quiet = false) {
@@ -399,6 +403,7 @@ function renderBrain() {
 
 function openBrainMenu() {
   if (els.brainBtn.disabled) return;
+  closeMenu();
   els.brainMenu.hidden = false;
   els.brainBtn.setAttribute('aria-expanded', 'true');
   renderBrain();
@@ -642,35 +647,11 @@ async function openConversation(id: number) {
   els.input.focus();
 }
 
-// ---------- continuity panel ----------
+// ---------- burger menu: models in memory and what the last reply recalled ----------
 
-/** Current state (from current_state.md), project steps and what the last reply recalled. */
+/** Called after every reply and conversation change; the current state itself is on the start screen. */
 async function refreshContinuity() {
-  const t = await api.lastTime().catch(() => null);
-  els.contState.textContent = t?.lastTask || (t?.conversationTitle ? `“${t.conversationTitle}”` : 'A fresh start');
-  els.contNext.hidden = !t?.nextStep;
-  els.contNext.textContent = t?.nextStep ? `Next: ${t.nextStep}` : '';
-  await renderSteps();
   renderRecalled();
-}
-
-/** Task-list items ("- [x] …") from the active project's memory file. */
-async function renderSteps() {
-  const conv = state.conversations.find((c) => c.id === state.currentId);
-  const slug = state.currentId !== null ? (conv?.project ?? '') : (state.settings?.activeProject ?? '');
-  const text = slug ? await api.memoryRead(`projects/${slug}.md`).catch(() => '') : '';
-  const steps = [...text.matchAll(/^\s*[-*+]\s+\[( |x|X)\]\s+(.+)$/gm)].map((m) => ({ done: m[1] !== ' ', text: m[2].trim() }));
-  els.contStepsWrap.hidden = steps.length === 0;
-  if (!steps.length) return;
-  const done = steps.filter((s) => s.done).length;
-  const current = steps.find((s) => !s.done);
-  const next = current ? steps.slice(steps.indexOf(current) + 1).find((s) => !s.done) : undefined;
-  els.contDial.style.setProperty('--p', `${Math.round((done / steps.length) * 100)}%`);
-  els.contDial.setAttribute('aria-label', `Project progress ${done} of ${steps.length} steps`);
-  els.contDialText.textContent = `${done}/${steps.length}`;
-  els.contStepsHead.textContent = `Project ${projects.find((p) => p.slug === slug)?.title ?? slug}`;
-  els.contStepNow.textContent = current?.text ?? `All ${steps.length} steps done`;
-  els.contStepNext.textContent = next ? `Next: ${next.text}` : '';
 }
 
 /** The memory files and notes the last reply was given. */
@@ -776,6 +757,18 @@ function renderMessages() {
   renderReviewChip();
   renderHeader();
   scrollToBottom();
+}
+
+const ORB_LABELS = {
+  waiting: 'Democritus is getting ready',
+  thinking: 'Democritus is thinking',
+  answering: 'Democritus is answering',
+};
+
+/** The chat orb: calm while getting ready and while answering; the cones rise while it thinks. */
+function orbPhase(orb: FerroOrb, phase: keyof typeof ORB_LABELS) {
+  orb.setMode(phase === 'thinking' ? 'active' : 'calm');
+  orb.setLabel(ORB_LABELS[phase]);
 }
 
 function thinkingDisplay(): ThinkingDisplay {
@@ -1039,7 +1032,7 @@ async function send() {
     el: null,
     stopRequested: false,
     statusText: '',
-    orb: thinkingDisplay() === 'thoughts' ? null : new Orb(),
+    orb: thinkingDisplay() === 'thoughts' ? null : new FerroOrb({ size: 'small', tuning: CHAT_TUNING, label: ORB_LABELS.waiting }),
     thoughts: 0,
     thinkStart: null,
     thinkEnd: null,
@@ -1047,7 +1040,7 @@ async function send() {
     markFinished,
   };
   state.generation = g;
-  g.orb?.start();
+  if (g.orb) orbPhase(g.orb, 'waiting');
   let started = false;
   setGenerating(true);
   await refreshConversations();
@@ -1068,7 +1061,7 @@ async function send() {
     }
     toast(errorText(e), 'error');
   } finally {
-    g.orb?.stop();
+    g.orb?.dispose(); // the reply is saved; its orb goes away
     const stale = g.message.status === 'streaming';
     state.generation = null;
     setGenerating(false);
@@ -1108,14 +1101,17 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       m.reasoning += ev.text;
       g.thoughts += 1;
       g.thinkStart ??= performance.now();
-      g.orb?.token();
+      if (g.orb) {
+        orbPhase(g.orb, 'thinking');
+        g.orb.event();
+      }
       scheduleLive();
       break;
     case 'content':
       m.content += ev.text;
       if (ev.text.trim()) {
         if (g.thinkStart != null) g.thinkEnd ??= performance.now();
-        g.orb?.setPhase('answering');
+        if (g.orb) orbPhase(g.orb, 'answering');
       }
       scheduleLive();
       break;
@@ -1123,7 +1119,7 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       m.reasoning += m.content;
       m.content = '';
       g.thinkEnd = null;
-      g.orb?.setPhase('thinking');
+      if (g.orb) orbPhase(g.orb, 'thinking');
       scheduleLive();
       break;
     case 'done': {
@@ -1526,6 +1522,12 @@ window.addEventListener('focus', () => void pollStatus());
 
 async function init() {
   initRail();
+  initMenu();
+  // The menu and the Brain picker never stay open together; opening the menu refreshes "In memory".
+  onMenuOpen(() => {
+    closeBrainMenu();
+    void refreshLoaded();
+  });
   initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
   initSecurityCheck();
   initCodePage({ ensureModelFits, defaultModel: () => state.settings?.defaultModel ?? '' });
@@ -1535,6 +1537,12 @@ async function init() {
     },
   });
   initFirewallWarning();
+  // The composer's coding-agent button is filled with the accent while the agent is allowed.
+  onOperatorChange((o) => {
+    const on = o.allowCodingAgent && !o.lockdown;
+    els.codeOpen.classList.toggle('on', on);
+    els.codeOpen.title = on ? 'Coding agent (on)' : 'Coding agent (off)';
+  });
   onPendingChange((n) => {
     pendingUpdates = n;
     renderReviewChip();
@@ -1553,7 +1561,6 @@ async function init() {
   els.newChat.innerHTML = `<span class="plus-dot" aria-hidden="true">${icons.plus}</span><span>New conversation</span>`;
   els.newChat.title = `New chat (${modKey}+N)`;
   els.refreshModels.innerHTML = `${icons.refresh}Refresh the model list`;
-  els.openSettings.innerHTML = icons.settings;
   els.loadedBtn.innerHTML = icons.refresh;
   els.attach.innerHTML = icons.clip;
   els.send.innerHTML = icons.arrowUp;

@@ -37,6 +37,26 @@ async function update(patch: Partial<OperatorSettings>) {
   }
 }
 
+/**
+ * The Coding agent page's on/off button. Saved by the backend like the "Coding
+ * agent" switch here, which logs the change with old and new values. It starts
+ * from the backend's current settings, not this window's copy, so it changes
+ * nothing but this one permission. Turning it on while Lockdown is on is refused.
+ */
+export async function setCodingAgentAllowed(on: boolean) {
+  try {
+    const current = await api.getOperator();
+    if (on && current.lockdown) {
+      operator = current;
+      return;
+    }
+    operator = await api.saveOperator({ ...current, allowCodingAgent: on });
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
+  emit(); // re-render to the real state
+}
+
 interface Toggle {
   key: keyof OperatorSettings;
   label: string;
@@ -89,13 +109,16 @@ function renderToggles() {
 }
 
 function renderLockdownButton(o: OperatorSettings) {
+  // The switch in the burger menu, and the "Lockdown on" pill beside it in the header.
   const btn = $<HTMLButtonElement>('#lockdown-btn');
   btn.classList.toggle('on', o.lockdown);
-  btn.setAttribute('aria-pressed', String(o.lockdown));
-  btn.querySelector('.rail-icon')!.innerHTML = o.lockdown ? icons.lock : icons.unlock;
-  btn.querySelector('.lockdown-label')!.textContent = o.lockdown ? 'Locked' : 'Lockdown';
-  btn.setAttribute('aria-label', o.lockdown ? 'Lockdown is on' : 'Lockdown');
+  btn.setAttribute('aria-checked', String(o.lockdown));
   btn.title = o.lockdown ? 'Lockdown is ON. Click to turn it off.' : 'Lockdown: block all internet access and pause learning';
+  const icon = $('#lock-row-icon');
+  icon.innerHTML = o.lockdown ? icons.lock : icons.unlock;
+  icon.classList.toggle('on', o.lockdown);
+  $('#lock-desc').textContent = o.lockdown ? 'On · network blocked, learning paused' : 'Block all network access and pause learning';
+  $('#lock-pill').hidden = !o.lockdown;
   $('#lockdown-banner').hidden = !o.lockdown;
   // The big lock goes from raised to pressed in while locked.
   $('#op-band').classList.toggle('locked', o.lockdown);

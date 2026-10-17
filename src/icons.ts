@@ -5,8 +5,9 @@ const svg = (path: string) =>
 export const icons = {
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'),
-  code: svg('<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>'),
+  code: svg('<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>'),
   folder: svg('<path d="M4 5h6l2 2h8v12H4z"/>'),
+  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
   list: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
   chevron: svg('<path d="M6 9l6 6 6-6"/>'),
   chevronRight: svg('<path d="M9 6l6 6-6 6"/>'),

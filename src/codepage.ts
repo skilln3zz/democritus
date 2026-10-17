@@ -1,11 +1,15 @@
-// The Code page: the coding agent works in one project folder. Reading is
-// shown as it happens; every edit arrives as a diff card with Apply / Reject,
-// and nothing is written until the operator presses Apply.
+// The Coding agent page (design-neumorphic/mockups/NeuCode.dc.html). It works
+// like the chat: your request is an inset bubble, and each run of the agent is
+// one reply card with the orb beside it. Inside the card: the thinking status,
+// the tool steps as they happen, the explanation and every proposed change as
+// a diff with Approve / Reject. Nothing is written until you press Approve, and
+// once you decide, the buttons are replaced by the result.
 import { api, type AgentEvent, type PlannedEdit } from './api';
 import { diffLines } from './diff';
 import { icons } from './icons';
 import { renderMarkdown } from './markdown';
-import { getOperator, onOperatorChange } from './operatorpage';
+import { AGENT_TUNING, FerroOrb } from './orb';
+import { getOperator, onOperatorChange, setCodingAgentAllowed } from './operatorpage';
 import { currentPage, onShow } from './pages';
 import { $, errorText, escapeText, toast } from './ui';
 
@@ -18,22 +22,45 @@ interface Deps {
 const FOLDER_KEY = 'democritus.codeFolder';
 const MODEL_KEY = 'democritus.codeModel';
 const MAX_DIFF_LINES = 400;
+/** The backend's step limit per run (MAX_STEPS in src-tauri/src/agent.rs). */
+const MAX_STEPS = 30;
+
+const ORB_LABELS = {
+  working: 'The agent is working',
+  waiting: 'Waiting for your approval',
+  idle: 'The agent is idle',
+  off: 'The agent is off',
+};
 
 let deps: Deps;
 let taskId = '';
 let running = false;
+let stopping = false;
 let homeBackups = '';
-const changed = new Set<string>();
 
-/** The card of the current model turn. */
-interface StepCard {
+/** One run of the agent: everything it does for one request, in one reply card. */
+interface Run {
   el: HTMLElement;
+  orb: FerroOrb;
+  started: number;
+  ended: number | null;
+  steps: number;
+  thoughts: number;
   thinking: string;
-  content: string;
+  /** The text the current step is writing, and where it goes. */
+  text: string;
+  textEl: HTMLElement | null;
+  /** The tool steps since the last text, shown as one group. */
+  toolsEl: HTMLElement | null;
+  waiting: number;
+  done: boolean;
 }
-let card: StepCard | null = null;
+let run: Run | null = null;
+let lastRun: Run | null = null;
+/** Every run's orb in the transcript, so New task can release them. */
+const orbs: FerroOrb[] = [];
 const toolRows = new Map<string, HTMLElement>();
-const approvalCards = new Map<string, HTMLElement>();
+const approvals = new Map<string, HTMLElement>();
 
 const store = {
   get(k: string) {
@@ -56,6 +83,7 @@ const log = () => $('#code-log');
 const input = () => $<HTMLTextAreaElement>('#code-input');
 const folderInput = () => $<HTMLInputElement>('#code-folder');
 const modelSelect = () => $<HTMLSelectElement>('#code-model');
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 function scrollDown() {
   const l = log();
@@ -67,20 +95,36 @@ function nearBottom(): boolean {
   return l.scrollHeight - l.scrollTop - l.clientHeight < 160;
 }
 
-function setStatus(text: string, state: 'idle' | 'running' | 'waiting' = running ? 'running' : 'idle') {
-  $('#code-status').textContent = text;
-  $('#code-status-pill').dataset.state = state;
+function agentAllowed(): boolean {
+  const o = getOperator();
+  return !!o?.allowCodingAgent && !o.lockdown;
 }
 
 function setRunning(on: boolean) {
   running = on;
-  $('#code-send').hidden = on;
-  $('#code-stop').hidden = !on;
-  ($('#code-stop') as HTMLButtonElement).disabled = false;
+  if (!on) stopping = false;
   modelSelect().disabled = on;
   folderInput().disabled = on;
+  ($('#code-change-folder') as HTMLButtonElement).disabled = on;
   ($('#code-new') as HTMLButtonElement).disabled = on;
-  if (!on) setStatus('Idle');
+  renderControls();
+}
+
+/** Send, Stop and the Agent button follow the run and the permission. */
+function renderControls() {
+  const o = getOperator();
+  const allowed = agentAllowed();
+  const stop = $<HTMLButtonElement>('#code-stop');
+  stop.disabled = !running || stopping;
+  ($('#code-send') as HTMLButtonElement).disabled = !allowed || running;
+  const btn = $<HTMLButtonElement>('#code-agent');
+  const on = !!o?.allowCodingAgent;
+  btn.classList.toggle('on', on && !o?.lockdown);
+  btn.setAttribute('aria-checked', String(on && !o?.lockdown));
+  btn.disabled = !o || !!o.lockdown;
+  btn.title = o?.lockdown ? 'Lockdown is on, so the coding agent is paused.' : on ? 'Turn the coding agent off (stops a running task)' : 'Turn the coding agent on';
+  $('#code-agent-label').textContent = on && !o?.lockdown ? 'Agent on' : 'Agent off';
+  if (!running && lastRun) lastRun.orb.setLabel(allowed ? ORB_LABELS.idle : ORB_LABELS.off);
 }
 
 // ---------- availability ----------
@@ -93,8 +137,10 @@ function renderAvailability() {
   banner.hidden = !(off || locked);
   banner.querySelector('.banner-text')!.textContent = locked
     ? 'Lockdown is on, so the coding agent is paused.'
-    : 'The coding agent is off. Turn on "Coding agent" under Settings & safety to use it.';
-  ($('#code-send') as HTMLButtonElement).disabled = off || locked;
+    : 'The coding agent is off. Turn it on with the Agent button above, or under Settings & security.';
+  // Switched off anywhere (here or under Settings & security) during a run: it stops, exactly like Stop.
+  if (running && off) void stop();
+  renderControls();
 }
 
 async function loadModels() {
@@ -111,27 +157,15 @@ async function loadModels() {
   sel.value = pick ?? models[0].id;
 }
 
-function renderFolderCaps() {
-  const f = folderInput().value.trim();
-  $('#code-folder-caps').textContent = f || 'No folder chosen';
-}
-
-function renderChanged() {
-  const list = $('#code-files');
-  list.innerHTML = changed.size
-    ? [...changed].map((p) => `<li class="mono">${escapeText(p)}</li>`).join('')
-    : '<li class="small muted">Nothing yet.</li>';
-}
-
 function emptyLog() {
   log().innerHTML =
     `<div class="empty code-empty"><span class="code-empty-icon">${icons.code}</span><h2 class="section-title">Hand Democritus a coding task</h2>` +
-    `<p class="muted">Pick a project folder on the left, choose a brain (a <span class="mono">coder</span> model works best), and describe the change. ` +
-    `Democritus reads what it needs, then proposes each edit as a diff. Nothing is written until you press <strong>Apply</strong>.</p>` +
+    `<p class="muted">Choose a project folder with <strong>Change folder</strong>, pick a brain (a <span class="mono">coder</span> model works best), and describe the change below. ` +
+    `The agent reads what it needs, then proposes each edit as a diff. Nothing is written to your folder until you press <strong>Approve</strong>.</p>` +
     `<p class="small muted">It can't run commands: when a build or tests are needed, it tells you which command to run.</p></div>`;
 }
 
-// ---------- transcript ----------
+// ---------- the reply card ----------
 
 function append(el: HTMLElement) {
   const stick = nearBottom();
@@ -140,60 +174,154 @@ function append(el: HTMLElement) {
   if (stick) scrollDown();
 }
 
-function newCard(step: number): StepCard {
+function newRun(): Run {
   const el = document.createElement('article');
-  el.className = 'message assistant code-step';
+  el.className = 'message assistant code-run';
+  el.dataset.state = 'working';
   el.innerHTML =
-    `<div class="reply-card"><div class="reply-meta"><span class="model-tag"></span><span class="label step-no">Step ${step}</span></div>` +
-    `<details class="thinking" hidden><summary><span class="chev">${icons.chevronRight}</span><span class="thinking-label">Thinking…</span></summary><div class="thinking-body"></div></details>` +
-    `<div class="body md" hidden></div><ul class="tool-list"></ul></div>`;
-  el.querySelector('.model-tag')!.textContent = modelSelect().value;
+    `<div class="orb-slot"></div><div class="reply-card">` +
+    `<div class="reply-meta"><span class="model-tag"></span></div>` +
+    `<p class="think-live">Working it out… <span class="think-count">0 thoughts so far</span></p>` +
+    `<span class="run-summary" hidden></span>` +
+    `<button type="button" class="think-toggle" aria-expanded="false" hidden><span class="chev">${icons.chevronRight}</span><span class="think-toggle-label">Show thoughts</span></button>` +
+    `<div class="thinking-body run-thinking" hidden></div>` +
+    `<div class="run-flow"></div>` +
+    `<p class="run-stopped" hidden></p>` +
+    `<div class="run-foot mono" hidden></div></div>`;
+  const tag = el.querySelector<HTMLElement>('.model-tag')!;
+  tag.textContent = modelSelect().value;
+  const orb = new FerroOrb({ size: 'small', tuning: AGENT_TUNING, label: ORB_LABELS.working });
+  el.querySelector('.orb-slot')!.append(orb.el);
+  orbs.push(orb);
+  orb.setMode('active');
+  el.querySelector('.think-toggle')!.addEventListener('click', () => toggleThoughts(r));
+  const r: Run = { el, orb, started: performance.now(), ended: null, steps: 0, thoughts: 0, thinking: '', text: '', textEl: null, toolsEl: null, waiting: 0, done: false };
   append(el);
-  return { el, thinking: '', content: '' };
+  return r;
 }
 
-// Streaming text is drawn once per frame. Every card that changed is drawn,
-// including one the next step has already replaced as "current".
-const dirty = new Set<StepCard>();
+function toggleThoughts(r: Run) {
+  const btn = r.el.querySelector<HTMLButtonElement>('.think-toggle')!;
+  const open = btn.getAttribute('aria-expanded') !== 'true';
+  btn.setAttribute('aria-expanded', String(open));
+  const body = r.el.querySelector<HTMLElement>('.run-thinking')!;
+  body.hidden = !open;
+  if (open) body.textContent = r.thinking.trim();
+  btn.querySelector('.chev')!.innerHTML = open ? icons.chevron : icons.chevronRight;
+  btn.querySelector('.think-toggle-label')!.textContent = open ? 'Hide thoughts' : 'Show thoughts';
+  const summary = r.el.querySelector<HTMLElement>('.run-summary')!;
+  if (!summary.hidden) summary.textContent = workedLine(r); // ", hidden" comes and goes
+}
+
+/** "Worked for X seconds · N steps · N thoughts, hidden" */
+function workedLine(r: Run): string {
+  const secs = Math.max(1, Math.round(((r.ended ?? performance.now()) - r.started) / 1000));
+  const open = r.el.querySelector('.think-toggle')?.getAttribute('aria-expanded') === 'true';
+  const thoughts = r.thoughts ? ` · ${plural(r.thoughts, 'thought')}${open ? '' : ', hidden'}` : '';
+  return `Worked for ${plural(secs, 'second')} · ${plural(r.steps, 'step')}${thoughts}`;
+}
+
+/** The status line and the orb follow what the agent is doing. */
+function renderState(r: Run) {
+  const working = !r.done && r.waiting === 0;
+  r.el.dataset.state = r.done ? 'done' : working ? 'working' : 'waiting';
+  const live = r.el.querySelector<HTMLElement>('.think-live')!;
+  live.hidden = !working;
+  if (working) live.querySelector('.think-count')!.textContent = `${plural(r.thoughts, 'thought')} so far`;
+  const summary = r.el.querySelector<HTMLElement>('.run-summary')!;
+  summary.hidden = working;
+  if (!working) summary.textContent = workedLine(r);
+  r.el.querySelector<HTMLElement>('.think-toggle')!.hidden = !r.thinking.trim();
+  const body = r.el.querySelector<HTMLElement>('.run-thinking')!;
+  if (!body.hidden) body.textContent = r.thinking.trim();
+  if (r.done) {
+    // Done, stopped or refused: it breathes quietly (never completely still while visible).
+    r.orb.setMode('calm');
+    r.orb.setLabel(agentAllowed() ? ORB_LABELS.idle : ORB_LABELS.off);
+  } else if (working) {
+    r.orb.setMode('active');
+    r.orb.setLabel(ORB_LABELS.working);
+  } else {
+    // It has stopped and is waiting for you, so it must not look busy.
+    r.orb.setMode('calm');
+    r.orb.setLabel(ORB_LABELS.waiting);
+  }
+}
+
+// Streaming text is drawn once per frame.
 let frame = 0;
+let dirty: Run | null = null;
 
-function drawCard(c: StepCard, finished: boolean) {
-  const think = c.el.querySelector<HTMLDetailsElement>('.thinking')!;
-  think.hidden = !c.thinking.trim();
-  const active = !finished && !c.content;
-  think.querySelector('.thinking-label')!.textContent = active ? 'Thinking…' : 'Thought process';
-  think.classList.toggle('active', active);
-  think.querySelector('.thinking-body')!.textContent = c.thinking.trim();
-  const body = c.el.querySelector<HTMLElement>('.body')!;
-  body.hidden = !c.content.trim();
-  body.innerHTML = renderMarkdown(c.content.trim());
-}
-
-function flushCards() {
+function flush() {
   if (frame) cancelAnimationFrame(frame);
   frame = 0;
+  const r = dirty;
+  dirty = null;
+  if (!r) return;
   const stick = nearBottom();
-  for (const c of dirty) drawCard(c, c !== card);
-  dirty.clear();
+  if (r.textEl) {
+    r.textEl.hidden = !r.text.trim();
+    r.textEl.innerHTML = renderMarkdown(r.text.trim());
+  }
+  renderState(r);
   if (stick) scrollDown();
 }
 
-function scheduleRender() {
-  if (!card) return;
-  dirty.add(card);
-  if (!frame) frame = requestAnimationFrame(flushCards);
+function scheduleRender(r: Run) {
+  dirty = r;
+  if (!frame) frame = requestAnimationFrame(flush);
 }
 
-function toolRow(callId: string, summary: string) {
-  if (!card) card = newCard(0);
+function flow(r: Run): HTMLElement {
+  return r.el.querySelector<HTMLElement>('.run-flow')!;
+}
+
+/** A new piece of explanation; the tool steps before it stay one group. */
+function textSegment(r: Run): HTMLElement {
+  if (!r.textEl) {
+    r.textEl = document.createElement('div');
+    r.textEl.className = 'body md';
+    r.textEl.hidden = true;
+    flow(r).append(r.textEl);
+    r.toolsEl = null;
+  }
+  return r.textEl;
+}
+
+const ING: Record<string, string> = { List: 'Listing', Read: 'Reading', Search: 'Searching', Edit: 'Editing', Write: 'Writing' };
+
+function toolRow(r: Run, callId: string, summary: string) {
+  flush();
+  // The text before a tool call is finished; the next text starts below the tools.
+  r.textEl = null;
+  r.text = '';
+  if (!r.toolsEl) {
+    r.toolsEl = document.createElement('ul');
+    r.toolsEl.className = 'tool-list';
+    flow(r).append(r.toolsEl);
+  }
+  const space = summary.indexOf(' ');
+  const verb = space > 0 ? summary.slice(0, space) : summary;
+  const rest = space > 0 ? summary.slice(space) : '';
   const li = document.createElement('li');
   li.className = 'tool-row';
   li.dataset.state = 'running';
-  li.innerHTML = `<span class="tool-mark" aria-hidden="true"></span><span class="tool-summary mono"></span><span class="tool-result muted"></span>`;
-  li.querySelector('.tool-summary')!.textContent = summary;
-  card.el.querySelector('.tool-list')!.append(li);
+  li.dataset.verb = verb;
+  li.innerHTML =
+    `<span class="tool-mark" aria-hidden="true">${icons.check}</span>` +
+    `<span class="tool-summary"><span class="tool-verb"></span><span class="mono tool-target"></span></span><span class="tool-result"></span>`;
+  li.querySelector('.tool-verb')!.textContent = ING[verb] ?? verb;
+  li.querySelector('.tool-target')!.textContent = rest;
+  r.toolsEl.append(li);
   toolRows.set(callId, li);
   if (nearBottom()) scrollDown();
+}
+
+function finishToolRow(li: HTMLElement, ok: boolean, summary: string) {
+  li.dataset.state = ok ? 'ok' : 'failed';
+  li.querySelector('.tool-verb')!.textContent = li.dataset.verb ?? '';
+  li.querySelector('.tool-mark')!.innerHTML = ok ? icons.check : icons.close;
+  li.querySelector('.tool-result')!.textContent = summary;
 }
 
 function diffHtml(e: PlannedEdit): string {
@@ -207,125 +335,213 @@ function diffHtml(e: PlannedEdit): string {
   );
 }
 
-function approvalCard(approvalId: string, callId: string, edit: PlannedEdit) {
-  const el = document.createElement('article');
+/** The first line the edit changes (1-based). */
+function firstChangedLine(e: PlannedEdit): number {
+  const a = e.before.split('\n');
+  const b = e.after.split('\n');
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i + 1;
+}
+
+function setApprovalTitle(el: HTMLElement, state: string, title: string) {
+  el.dataset.state = state;
+  el.querySelector('.approval-label')!.textContent = title;
+}
+
+/** Replaces the buttons with the result, so a decision can't be flipped by a second click. */
+function showResult(el: HTMLElement, label: string, kind: 'ok' | 'muted' | 'fail' | 'busy', note: string) {
+  el.querySelectorAll<HTMLElement>('.approval-actions, .approval-note-row').forEach((x) => x.remove());
+  const box = el.querySelector<HTMLElement>('.approval-result')!;
+  box.hidden = false;
+  box.innerHTML = `<span class="result-pill" data-kind="${kind}"></span><span class="result-note small"></span>`;
+  box.querySelector('.result-pill')!.textContent = label;
+  box.querySelector('.result-note')!.textContent = note;
+}
+
+function approvalBlock(r: Run, approvalId: string, callId: string, edit: PlannedEdit) {
+  flush();
+  r.textEl = null;
+  r.text = '';
+  r.toolsEl = null;
+  const el = document.createElement('div');
   el.className = 'code-approval';
   el.dataset.state = 'waiting';
-  const adds = diffLines(edit.before, edit.after, 0).filter((l) => l.kind === 'add').length;
-  const dels = diffLines(edit.before, edit.after, 0).filter((l) => l.kind === 'del').length;
+  el.dataset.call = callId;
+  const all = diffLines(edit.before, edit.after, 0);
+  const adds = all.filter((l) => l.kind === 'add').length;
+  const dels = all.filter((l) => l.kind === 'del').length;
   el.innerHTML =
-    `<div class="approval-head caps"><span class="ink">${edit.newFile ? 'New file' : 'Edit'}</span><span class="mono approval-path"></span>` +
-    `<span class="muted">+${adds} −${dels}</span><span class="approval-state">Waiting for you</span></div>` +
+    `<div class="approval-head"><span class="approval-title"><span class="approval-dot" aria-hidden="true"></span><span class="approval-label">Proposed change · waiting for you</span></span>` +
+    `<span class="mono approval-where"><span class="approval-path"></span><span class="approval-line"></span></span>` +
+    `<span class="mono approval-count">+${adds} −${dels}</span></div>` +
     `<div class="diff-file code-diff">${diffHtml(edit)}</div>` +
-    `<label class="sr-only" for="note-${approvalId}">Note for Democritus</label>` +
-    `<input id="note-${approvalId}" class="approval-note" type="text" placeholder="Optional note for Democritus (why, or what to do instead)" spellcheck="true" />` +
-    `<div class="proposal-actions"><button type="button" class="btn hex accent" data-act="apply">Apply</button><button type="button" class="btn" data-act="reject">Reject</button></div>`;
+    `<div class="approval-actions"><button type="button" class="btn accent" data-act="apply">Approve</button><button type="button" class="btn" data-act="reject">Reject</button>` +
+    `<span class="small muted">Nothing is written to your folder until you approve.</span></div>` +
+    `<div class="approval-note-row"><label class="sr-only" for="note-${approvalId}">Tell the agent what to change</label>` +
+    `<input id="note-${approvalId}" class="approval-note" type="text" placeholder="Tell the agent what to change (optional, sent with Approve or Reject)" spellcheck="true" /></div>` +
+    `<div class="approval-result" hidden></div>`;
   el.querySelector('.approval-path')!.textContent = edit.path;
+  el.querySelector('.approval-line')!.textContent = edit.newFile ? ' · new file' : ` · line ${firstChangedLine(edit)}`;
   el.addEventListener('click', async (e) => {
     const act = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-act]')?.dataset.act;
-    if (!act || el.dataset.state !== 'waiting') return;
-    el.querySelectorAll<HTMLButtonElement>('[data-act]').forEach((b) => (b.disabled = true));
+    if (!act || el.dataset.state !== 'waiting' || el.dataset.answering) return;
+    el.dataset.answering = '1';
+    const buttons = el.querySelectorAll<HTMLButtonElement>('[data-act]');
+    buttons.forEach((b) => (b.disabled = true));
     const note = el.querySelector<HTMLInputElement>('.approval-note')!.value;
     try {
       await api.agentRespond(approvalId, act === 'apply', note);
-      el.dataset.state = act === 'apply' ? 'applying' : 'rejected';
+      // The result comes from the backend (toolResult), which may already have arrived;
+      // until then, say what is happening.
+      if (el.dataset.state !== 'waiting') return;
+      if (act === 'apply') {
+        setApprovalTitle(el, 'applying', 'Writing the change…');
+        showResult(el, 'Writing…', 'busy', '');
+      } else {
+        setApprovalTitle(el, 'rejected', 'Change rejected');
+        showResult(el, 'Rejected', 'muted', 'Nothing was written. Tell the agent what to try instead.');
+      }
     } catch (err) {
       toast(errorText(err), 'error');
+      delete el.dataset.answering;
+      buttons.forEach((b) => (b.disabled = false));
     }
   });
-  approvalCards.set(callId, el);
-  approvalCards.set(approvalId, el);
-  append(el);
+  approvals.set(callId, el);
+  // The edit's step row waits with you rather than looking busy.
+  const row = toolRows.get(callId);
+  if (row) {
+    row.dataset.state = 'waiting';
+    row.querySelector('.tool-verb')!.textContent = row.dataset.verb ?? '';
+    row.querySelector('.tool-result')!.textContent = 'waiting for you';
+  }
+  approvals.set(approvalId, el);
+  flow(r).append(el);
+  r.waiting += 1;
+  renderState(r);
+  if (nearBottom()) scrollDown();
   el.querySelector<HTMLButtonElement>('[data-act="apply"]')?.focus({ preventScroll: true });
-  setStatus('Waiting for your OK', 'waiting');
-  if (currentPage() !== 'code') toast(`The coding agent wants to change ${edit.path}. Open Code to review it.`);
+  if (currentPage() !== 'code') toast(`The coding agent wants to change ${edit.path}. Open the Coding agent to review it.`);
 }
 
-function doneLine(ev: Extract<AgentEvent, { type: 'done' }>) {
-  const el = document.createElement('div');
-  el.className = 'brain-switch code-done';
-  el.dataset.status = ev.status;
-  el.setAttribute('role', 'separator');
-  const label =
-    ev.status === 'complete' ? 'Task finished' : ev.status === 'stopped' ? 'Stopped' : ev.status === 'limit' ? 'Paused' : 'Something went wrong';
-  el.innerHTML =
-    `<div class="brain-switch-line">${ev.status === 'complete' ? icons.code : icons.square}<span>${label} · <strong>${ev.editsApplied}</strong> edit${ev.editsApplied === 1 ? '' : 's'} applied</span></div>` +
-    (ev.message ? `<div class="handoff-note small"></div>` : '');
-  if (ev.message) el.querySelector('.handoff-note')!.textContent = ev.message;
-  append(el);
-  if (ev.status === 'error') {
-    const box = document.createElement('div');
-    box.className = 'error-box';
-    box.textContent = ev.message;
-    el.after(box);
+function onToolResult(ev: Extract<AgentEvent, { type: 'toolResult' }>) {
+  const row = toolRows.get(ev.callId);
+  const a = approvals.get(ev.callId);
+  // An edit's full result is in its change block; its step row only says what happened.
+  if (row) finishToolRow(row, ev.ok, !a ? ev.summary : ev.ok ? 'written' : ev.summary === 'Rejected.' ? 'rejected' : 'not written');
+  if (!a) return;
+  const path = a.querySelector('.approval-path')!.textContent ?? '';
+  if (ev.ok) {
+    const backup = ev.summary.replace(/^Applied\.\s*/, '').replace(/^Backup of the old version:\s*/, 'old version kept in ');
+    setApprovalTitle(a, 'applied', 'Change applied');
+    showResult(a, 'Applied ✓', 'ok', `Written to ${path} · logged${backup ? ` · ${backup}` : ''}`);
+  } else if (ev.summary === 'Rejected.') {
+    setApprovalTitle(a, 'rejected', 'Change rejected');
+    showResult(a, 'Rejected', 'muted', 'Nothing was written. Tell the agent what to try instead.');
+  } else {
+    setApprovalTitle(a, 'failed', 'Change not written');
+    showResult(a, 'Not written', 'fail', ev.summary);
   }
 }
 
+function onResolved(r: Run, ev: Extract<AgentEvent, { type: 'resolved' }>) {
+  const a = approvals.get(ev.approvalId);
+  r.waiting = Math.max(0, r.waiting - 1);
+  if (a && ev.message) {
+    setApprovalTitle(a, 'stopped', 'Change not made');
+    showResult(a, 'Stopped', 'muted', 'Nothing was written.');
+    const row = toolRows.get(a.dataset.call ?? '');
+    if (row) {
+      finishToolRow(row, false, 'stopped');
+      row.dataset.state = 'stopped';
+    }
+  }
+  renderState(r);
+}
+
+function onDone(r: Run, ev: Extract<AgentEvent, { type: 'done' }>) {
+  dirty = r;
+  flush();
+  r.done = true;
+  r.ended = performance.now();
+  r.waiting = 0;
+  const summary = r.el.querySelector<HTMLElement>('.run-summary')!;
+  summary.classList.add('code-done');
+  summary.dataset.status = ev.status;
+  r.el.dataset.status = ev.status;
+  const line = r.el.querySelector<HTMLElement>('.run-stopped')!;
+  if (ev.status === 'stopped') {
+    const locked = !!getOperator()?.lockdown;
+    const who = locked ? 'Stopped by Lockdown.' : 'Stopped by you.';
+    line.textContent =
+      ev.editsApplied === 0
+        ? `${who} Nothing was written to your folder.`
+        : `${who} Nothing more was written; the ${plural(ev.editsApplied, 'change')} you approved earlier ${ev.editsApplied === 1 ? 'stays' : 'stay'} applied.`;
+    line.hidden = false;
+  } else if (ev.status === 'limit' && ev.message) {
+    const note = document.createElement('p');
+    note.className = 'run-note small muted';
+    note.textContent = ev.message;
+    flow(r).append(note);
+  } else if (ev.status === 'error') {
+    const box = document.createElement('div');
+    box.className = 'error-box';
+    box.textContent = ev.message || 'Something went wrong.';
+    flow(r).append(box);
+  }
+  const foot = r.el.querySelector<HTMLElement>('.run-foot')!;
+  foot.hidden = !ev.tokens;
+  foot.textContent = `${ev.tokens.toLocaleString()} tokens`;
+  renderState(r);
+}
+
 function onEvent(ev: AgentEvent) {
+  if (ev.type === 'started') taskId = ev.taskId;
+  const r = run;
+  if (!r) return;
   switch (ev.type) {
     case 'started':
-      taskId = ev.taskId;
-      $('#code-ctx').textContent = `Context window for this task: ${ev.numCtx.toLocaleString()} tokens (Chat & model settings → Coding agent window).`;
+      r.el.querySelector<HTMLElement>('.model-tag')!.title = `Context window for this task: ${ev.numCtx.toLocaleString()} tokens (Chat & model settings → Coding agent window)`;
       break;
     case 'step':
-      flushCards();
-      card = newCard(ev.step);
-      setStatus(`Step ${ev.step} · thinking`);
+      flush();
+      r.steps = ev.step;
+      $('#code-step').textContent = String(ev.step);
+      // Each step writes its own piece of text.
+      r.textEl = null;
+      r.text = '';
+      renderState(r);
       break;
     case 'thinking':
-      if (!card) card = newCard(0);
-      card.thinking += ev.text;
-      scheduleRender();
+      r.thinking += ev.text;
+      r.thoughts += 1;
+      r.orb.event();
+      scheduleRender(r);
       break;
     case 'content':
-      if (!card) card = newCard(0);
-      card.content += ev.text;
-      scheduleRender();
+      textSegment(r);
+      r.text += ev.text;
+      r.orb.event();
+      scheduleRender(r);
       break;
     case 'toolCall':
-      toolRow(ev.callId, ev.summary);
-      setStatus(ev.summary);
+      toolRow(r, ev.callId, ev.summary);
+      r.orb.event(0.5);
       break;
-    case 'toolResult': {
-      const row = toolRows.get(ev.callId);
-      if (row) {
-        row.dataset.state = ev.ok ? 'ok' : 'failed';
-        row.querySelector('.tool-result')!.textContent = ev.summary;
-      }
-      const a = approvalCards.get(ev.callId);
-      if (a) {
-        a.dataset.state = ev.ok ? 'applied' : a.dataset.state === 'rejected' || ev.summary === 'Rejected.' ? 'rejected' : 'failed';
-        a.querySelector('.approval-state')!.textContent = ev.ok ? 'Applied' : ev.summary === 'Rejected.' ? 'Rejected' : 'Not written';
-        if (!ev.ok && ev.summary !== 'Rejected.') a.append(Object.assign(document.createElement('p'), { className: 'small form-error', textContent: ev.summary }));
-        if (ev.ok) {
-          const path = a.querySelector('.approval-path')!.textContent ?? '';
-          changed.add(path);
-          renderChanged();
-          const note = Object.assign(document.createElement('p'), { className: 'small muted', textContent: ev.summary });
-          a.append(note);
-        }
-        a.querySelectorAll<HTMLElement>('.approval-note, .proposal-actions').forEach((x) => x.remove());
-      }
-      setStatus('Working');
+    case 'toolResult':
+      onToolResult(ev);
+      r.orb.event(0.3);
       break;
-    }
     case 'approval':
-      approvalCard(ev.approvalId, ev.callId, ev.edit);
+      approvalBlock(r, ev.approvalId, ev.callId, ev.edit);
       break;
-    case 'resolved': {
-      const a = approvalCards.get(ev.approvalId);
-      if (a && ev.message) {
-        a.dataset.state = 'stopped';
-        a.querySelector('.approval-state')!.textContent = 'Stopped';
-        a.querySelectorAll<HTMLElement>('.approval-note, .proposal-actions').forEach((x) => x.remove());
-      }
+    case 'resolved':
+      onResolved(r, ev);
       break;
-    }
     case 'done':
-      if (card) dirty.add(card);
-      card = null;
-      flushCards();
-      doneLine(ev);
+      onDone(r, ev);
+      run = null;
       setRunning(false);
       break;
   }
@@ -339,9 +555,13 @@ async function start() {
   const folder = folderInput().value.trim();
   const model = modelSelect().value;
   if (!message) return;
+  if (!agentAllowed()) {
+    renderAvailability();
+    return;
+  }
   if (!folder) {
-    toast('Pick a project folder first.', 'error');
-    folderInput().focus();
+    toast('Choose a project folder first.', 'error');
+    editFolder();
     return;
   }
   if (!model) {
@@ -357,13 +577,19 @@ async function start() {
   scrollDown();
   input().value = '';
   autoGrow();
-  card = null;
+  run = newRun();
+  lastRun = run;
+  $('#code-step').textContent = '0';
   setRunning(true);
-  setStatus('Starting');
   try {
     await api.agentRun({ taskId, folder, model, message }, onEvent);
   } catch (e) {
     // Refused before it started (permission, folder, another task running).
+    // It never ran, so there is no reply card; the reason goes under your request.
+    run?.orb.dispose();
+    run?.el.remove();
+    run = null;
+    lastRun = null;
     const box = document.createElement('div');
     box.className = 'error-box';
     box.textContent = errorText(e);
@@ -374,25 +600,68 @@ async function start() {
   }
 }
 
+/** Stop agent, Esc, and switching the agent off during a run all end it here. */
 async function stop() {
-  if (!running) return;
-  ($('#code-stop') as HTMLButtonElement).disabled = true;
-  setStatus('Stopping');
-  await api.agentStop().catch((e) => toast(errorText(e), 'error'));
+  if (!running || stopping) return;
+  stopping = true;
+  renderControls();
+  await api.agentStop().catch((e) => {
+    stopping = false;
+    renderControls();
+    toast(errorText(e), 'error');
+  });
+}
+
+/** The Agent on/off button: the "Coding agent" permission. Off during a run stops it exactly like Stop. */
+async function toggleAgent() {
+  const o = getOperator();
+  if (!o || o.lockdown) return;
+  if (o.allowCodingAgent) {
+    if (running) await stop();
+    await setCodingAgentAllowed(false);
+  } else {
+    await setCodingAgentAllowed(true);
+  }
 }
 
 function newTask() {
   if (running) return;
   if (taskId) void api.agentForget(taskId);
   taskId = '';
-  changed.clear();
   toolRows.clear();
-  approvalCards.clear();
-  card = null;
-  renderChanged();
+  approvals.clear();
+  for (const orb of orbs.splice(0)) orb.dispose();
+  run = null;
+  lastRun = null;
+  $('#code-step').textContent = '0';
   emptyLog();
-  $('#code-ctx').textContent = '';
   input().focus();
+}
+
+// ---------- folder ----------
+
+function sizeFolder() {
+  const f = folderInput();
+  f.size = Math.max(16, Math.min(60, (f.value || f.placeholder).length + 1));
+}
+
+/** "Change folder": the chip becomes an editable field; Enter or leaving it keeps the new folder. */
+function editFolder() {
+  const f = folderInput();
+  if (f.disabled) return;
+  f.readOnly = false;
+  f.closest('.code-folder-chip')!.classList.add('editing');
+  if (!f.value) f.placeholder = 'D:\\projects\\my-app';
+  f.focus();
+  f.select();
+}
+
+function endEditFolder() {
+  const f = folderInput();
+  f.readOnly = true;
+  f.placeholder = 'No folder chosen';
+  f.closest('.code-folder-chip')!.classList.remove('editing');
+  sizeFolder();
 }
 
 function autoGrow() {
@@ -404,31 +673,40 @@ function autoGrow() {
 export function initCodePage(d: Deps) {
   deps = d;
   $('#code-send').innerHTML = icons.arrowUp;
-  $('#code-stop').innerHTML = icons.square;
+  $('#code-step-max').textContent = String(MAX_STEPS);
   folderInput().value = store.get(FOLDER_KEY);
-  renderFolderCaps();
-  renderChanged();
+  sizeFolder();
   emptyLog();
   void api.appPaths().then((p) => {
     homeBackups = `${p.home}\\backups\\agent\\`;
-    $('#code-backups').textContent = `Before a file is changed, its old version is copied to ${homeBackups}<task>.`;
+    $('.code-folder-chip').title += ` Before a file is changed, its old version is copied to ${homeBackups}<task>.`;
   });
   onOperatorChange(renderAvailability);
   onShow('code', () => {
     renderAvailability();
     if (!running) void loadModels();
-    if (!folderInput().value) folderInput().focus();
+    if (!folderInput().value) editFolder();
     else input().focus();
   });
   folderInput().addEventListener('change', () => {
     store.set(FOLDER_KEY, folderInput().value.trim());
-    renderFolderCaps();
+    sizeFolder();
     // A different folder is a different task.
     if (taskId) newTask();
   });
+  folderInput().addEventListener('input', sizeFolder);
+  folderInput().addEventListener('blur', endEditFolder);
+  folderInput().addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !folderInput().readOnly) {
+      e.preventDefault();
+      input().focus(); // blur commits it
+    }
+  });
+  $('#code-change-folder').addEventListener('click', editFolder);
   modelSelect().addEventListener('change', () => store.set(MODEL_KEY, modelSelect().value));
   $('#code-send').addEventListener('click', () => void start());
   $('#code-stop').addEventListener('click', () => void stop());
+  $('#code-agent').addEventListener('click', () => void toggleAgent());
   $('#code-new').addEventListener('click', newTask);
   input().addEventListener('input', autoGrow);
   input().addEventListener('keydown', (e) => {
@@ -458,4 +736,5 @@ export function initCodePage(d: Deps) {
       );
     }
   });
+  renderControls();
 }

@@ -22,20 +22,6 @@
             </label>
             <div id="conversation-list"></div>
             <div id="sidebar-empty" class="muted small" hidden>No conversations yet</div>
-            <div class="side-nav" role="group" aria-label="Pages">
-              <button class="rail-btn icon-tile" type="button" data-page="memory" title="Memory" aria-label="Memory">
-                <span class="rail-icon" data-icon="folder"></span><span id="memory-badge" class="rail-badge" hidden></span>
-              </button>
-              <button class="rail-btn icon-tile" type="button" data-page="build" title="Build Democritus" aria-label="Build Democritus">
-                <span class="rail-icon" data-icon="flask"></span><span id="build-badge" class="rail-badge" hidden></span>
-              </button>
-              <button class="rail-btn icon-tile" type="button" data-page="code" title="Code (coding agent)" aria-label="Code"><span class="rail-icon" data-icon="code"></span></button>
-              <button class="rail-btn icon-tile" type="button" data-page="log" title="Activity log" aria-label="Activity log"><span class="rail-icon" data-icon="list"></span></button>
-              <button id="lockdown-btn" class="icon-tile lockdown" type="button" title="Lockdown: block all internet access and pause learning" aria-label="Lockdown" aria-pressed="false">
-                <span class="rail-icon" data-icon="unlock"></span><span class="lockdown-label sr-only">Lockdown</span>
-              </button>
-              <button class="rail-btn icon-tile" type="button" data-page="operator" title="Settings &amp; security" aria-label="Settings and security"><span class="rail-icon" data-icon="shield"></span></button>
-            </div>
           </nav>
 
           <main id="main">
@@ -65,7 +51,33 @@
               <button id="server-status" class="inset-pill status-pill" type="button" data-state="checking">
                 <span class="dot" aria-hidden="true"></span><span class="status-label">Checking server…</span>
               </button>
-              <button id="open-settings" class="round-btn small" type="button" title="Chat and model settings" aria-label="Chat and model settings"></button>
+              <div class="menu-slot">
+                <div id="header-tools" class="header-tools">
+                  <span id="lock-pill" class="inset-pill lock-pill" hidden><span class="rail-icon" data-icon="lock"></span>Lockdown on</span>
+                  <div class="menu-picker">
+                    <button id="menu-btn" class="round-btn menu-btn" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false" aria-controls="app-menu"><span class="rail-icon" data-icon="menu"></span><span id="menu-dot" class="menu-dot" aria-hidden="true" hidden></span></button>
+                    <div id="app-menu" class="popover app-menu" role="menu" aria-label="Menu" hidden>
+                      <button class="rail-btn menu-row" type="button" role="menuitem" data-page="memory"><span class="menu-icon rail-icon" data-icon="folder"></span><span class="menu-text"><span class="menu-label">Memory</span><span id="memory-note" class="menu-desc">Your notes and what Democritus remembers</span></span><span id="memory-badge" class="menu-badge" hidden></span></button>
+                      <button class="rail-btn menu-row" type="button" role="menuitem" data-page="build"><span class="menu-icon rail-icon" data-icon="flask"></span><span class="menu-text"><span class="menu-label">Training</span><span class="menu-desc">Build your own Democritus model</span></span><span id="build-badge" class="menu-badge" hidden>building</span></button>
+                      <button class="rail-btn menu-row" type="button" role="menuitem" data-page="log"><span class="menu-icon rail-icon" data-icon="list"></span><span class="menu-text"><span class="menu-label">Activity log</span><span class="menu-desc">Everything Democritus did, with times</span></span></button>
+                      <button class="rail-btn menu-row" type="button" role="menuitem" data-page="operator"><span class="menu-icon rail-icon" data-icon="shield"></span><span class="menu-text"><span class="menu-label">Settings &amp; security</span><span class="menu-desc">Permissions, security check, appearance</span></span></button>
+                      <button id="open-settings" class="menu-row" type="button" role="menuitem"><span class="menu-icon rail-icon" data-icon="settings"></span><span class="menu-text"><span class="menu-label">Chat &amp; model settings</span><span class="menu-desc">System prompt, temperature, context window</span></span></button>
+                      <div class="menu-sep" role="separator"></div>
+                      <div class="menu-row lock-row">
+                        <span id="lock-row-icon" class="menu-icon rail-icon" data-icon="unlock"></span>
+                        <span class="menu-text"><span class="menu-label">Lockdown</span><span id="lock-desc" class="menu-desc">Block all network access and pause learning</span></span>
+                        <button id="lockdown-btn" class="menu-switch" type="button" role="menuitemcheckbox" aria-checked="false" aria-label="Lockdown"><span class="knob" aria-hidden="true"></span></button>
+                      </div>
+                      <div class="menu-sep" role="separator"></div>
+                      <section class="menu-mem" aria-label="In memory">
+                        <h2 class="label with-action"><span>In memory</span><button id="loaded-btn" class="round-btn tiny" type="button" title="Check which models are loaded" aria-label="Check which models are loaded"></button></h2>
+                        <div id="loaded-panel" class="loaded-list"></div>
+                        <span class="menu-desc recalled-line">Recalled this turn: <span id="cont-recalled" class="mono">—</span></span>
+                      </section>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </header>
 
             <div id="lockdown-banner" class="banner lockdown-banner" hidden>
@@ -88,7 +100,8 @@
                 <button id="attach" class="round-btn" type="button" title="Attach text files" aria-label="Attach a text file"></button>
                 <input id="attach-input" type="file" multiple hidden />
                 <label for="input" class="sr-only">Message Democritus</label>
-                <textarea id="input" rows="1" placeholder="Message Democritus…   Enter to send" spellcheck="true"></textarea>
+                <textarea id="input" rows="1" placeholder="Message Democritus…   Enter to send · Shift+Enter for a new line" spellcheck="true"></textarea>
+                <button id="code-open" class="rail-btn round-btn code-open" type="button" data-page="code" title="Coding agent" aria-label="Coding agent"><span class="rail-icon" data-icon="code"></span></button>
                 <button id="send" class="send-btn" type="button" title="Send (Enter)" aria-label="Send"></button>
                 <button id="stop" class="send-btn stop" type="button" title="Stop generating (Esc)" aria-label="Stop generating" hidden></button>
               </div>
@@ -97,102 +110,69 @@
             <div id="drop-overlay" hidden><div>Drop text files to attach them</div></div>
           </main>
 
-          <aside id="continuity" class="card continuity" aria-label="Continuity">
-            <section class="cont-section">
-              <h2 class="label">Current state</h2>
-              <p id="cont-state" class="state-title">A fresh start</p>
-              <p id="cont-next" class="small muted" hidden></p>
-            </section>
-            <section id="cont-steps-wrap" class="cont-progress" hidden>
-              <div class="dial-ring">
-                <div id="cont-dial" class="dial" role="img"><div id="cont-dial-text" class="dial-center"></div></div>
-              </div>
-              <div class="dial-text">
-                <span id="cont-steps-head" class="label"></span>
-                <span id="cont-step-now" class="strong"></span>
-                <span id="cont-step-next" class="label"></span>
-              </div>
-            </section>
-            <section class="cont-section">
-              <h2 class="label with-action">
-                <span>In memory</span>
-                <button id="loaded-btn" class="round-btn tiny" type="button" title="Check which models are loaded" aria-label="Check which models are loaded"></button>
-              </h2>
-              <div id="loaded-panel" class="loaded-list"></div>
-            </section>
-            <section class="inset-box recalled">
-              <span class="label">Recalled this turn</span>
-              <div id="cont-recalled" class="mono small">—</div>
-            </section>
-          </aside>
         </div>
       </section>
 
       <!-- ================= CODE (coding agent) ================= -->
-      <section id="page-code" class="page" aria-label="Code" hidden>
-        <header class="page-head">
+      <section id="page-code" class="page" aria-label="Coding agent" hidden>
+        <header class="page-head code-head">
           <button class="rail-btn round-btn back-link" type="button" data-page="chat" title="Back to chat" aria-label="Back to chat"><span class="rail-icon" data-icon="back"></span></button>
-          <div class="page-head-text">
-            <h1 class="page-title">Code</h1>
-            <span class="muted">Reads freely · every edit needs your OK · <span id="code-folder-caps" class="mono">No folder chosen</span></span>
-          </div>
-          <div class="page-head-controls">
-            <label class="code-brain">
-              <span class="label">Brain</span>
-              <select id="code-model" class="inset-select mono"></select>
+          <h1 class="page-title code-title">Coding agent</h1>
+          <div class="code-head-controls">
+            <label class="inset-pill code-folder-chip" title="The agent sees and changes only files inside this folder. Democritus's own folders and model files are off limits.">
+              <span class="field-icon" data-icon="folder"></span>
+              <span class="sr-only">Project folder</span>
+              <input id="code-folder" class="mono" type="text" placeholder="No folder chosen" spellcheck="false" autocomplete="off" readonly />
             </label>
-            <span id="code-status-pill" class="inset-pill status-pill code-status" data-state="idle"><span class="dot" aria-hidden="true"></span><span id="code-status">Idle</span></span>
+            <button id="code-change-folder" class="pill-btn small code-head-btn" type="button">Change folder</button>
+            <label class="inset-pill code-brain" title="A coder model works best">
+              <span class="label">Brain</span>
+              <select id="code-model" class="mono"></select>
+            </label>
+            <button id="code-new" class="pill-btn small code-head-btn" type="button">New task</button>
+            <button id="code-agent" class="pill-btn code-agent-btn" type="button" role="switch" aria-checked="false"><span class="rail-icon" data-icon="code"></span><span id="code-agent-label">Agent off</span></button>
           </div>
+          <div class="menu-slot"></div>
         </header>
+        <div class="code-safety" role="group" aria-label="What the agent may do">
+          <span class="code-safety-sandbox"><span class="rail-icon" data-icon="shield"></span>Sandbox: this folder only</span>
+          <span>Can't run commands</span>
+          <span>No internet</span>
+          <span>Every write needs your approval</span>
+          <span>Step <strong id="code-step">0</strong> of <span id="code-step-max">30</span></span>
+          <button id="code-stop" class="code-stop-btn" type="button" title="Stop the agent (Esc)" disabled><span class="stop-square" aria-hidden="true"></span>Stop agent</button>
+        </div>
         <div id="code-off" class="banner" hidden>
           <span class="banner-text"></span>
           <button class="rail-btn pill-btn small" type="button" data-page="operator">Settings &amp; security</button>
         </div>
-        <div class="code-layout">
-          <aside class="card code-side" aria-label="Project">
-            <h2 class="label">Project folder</h2>
-            <label class="inset-field">
-              <span class="field-icon" data-icon="folder"></span>
-              <span class="sr-only">Project folder</span>
-              <input id="code-folder" type="text" placeholder="D:\projects\my-app" spellcheck="false" autocomplete="off" />
-            </label>
-            <p class="small muted">The agent sees and changes only files inside this folder. It can't run commands or reach the internet. Democritus's own folders and model files are off limits.</p>
-            <button id="code-new" class="pill-btn small" type="button">New task</button>
-            <h2 class="label">Changed in this task</h2>
-            <ul id="code-files" class="code-files inset-box"></ul>
-            <h2 class="label">Backups</h2>
-            <p id="code-backups" class="small muted"></p>
-            <p id="code-ctx" class="small muted"></p>
-          </aside>
-          <main class="code-main">
-            <section id="code-log" class="code-log" aria-label="Agent transcript" aria-live="polite"></section>
-            <footer class="code-composer">
-              <div class="composer-box">
-                <label for="code-input" class="sr-only">Task for the coding agent</label>
-                <textarea id="code-input" rows="1" placeholder="Describe the change…   Enter to start, Esc to stop" spellcheck="true"></textarea>
-                <button id="code-send" class="send-btn" type="button" title="Start (Enter)" aria-label="Start"></button>
-                <button id="code-stop" class="send-btn stop" type="button" title="Stop (Esc)" aria-label="Stop the agent" hidden></button>
-              </div>
-            </footer>
-          </main>
-        </div>
+        <section id="code-log" class="code-log" aria-label="Messages" aria-live="polite"></section>
+        <footer class="code-composer">
+          <div class="composer-box">
+            <label for="code-input" class="sr-only">Tell the agent what to do</label>
+            <textarea id="code-input" rows="1" placeholder="Tell the agent what to do in this folder…   Enter to send · Shift+Enter for a new line" spellcheck="true"></textarea>
+            <button id="code-send" class="send-btn" type="button" title="Send (Enter)" aria-label="Send"></button>
+          </div>
+        </footer>
       </section>
 
       <!-- ================= BUILD DEMOCRITUS (Steps 6D and 6E) ================= -->
-      <section id="page-build" class="page" aria-label="Build Democritus" hidden>
-        <header class="page-head">
-          <button class="rail-btn round-btn back-link" type="button" data-page="chat" title="Back to chat" aria-label="Back to chat"><span class="rail-icon" data-icon="back"></span></button>
-          <div class="page-head-text">
-            <h1 class="page-title">Build Democritus</h1>
-            <span id="bd-sub" class="muted">Distil a large local model into a small brain of your own</span>
+      <section id="page-build" class="page" aria-label="Training" hidden>
+        <header class="train-head">
+          <div class="train-brand"><img id="bd-logo" alt="" width="30" height="30" /><span>Democritus</span></div>
+          <nav class="train-tabs" aria-label="Sections">
+            <button class="rail-btn train-tab" type="button" data-page="chat">Chat</button>
+            <button class="rail-btn train-tab" type="button" data-page="memory">Memory</button>
+            <span class="train-tab current" aria-current="page"><span class="train-tab-dot" aria-hidden="true"></span>Training</span>
+            <button class="rail-btn train-tab" type="button" data-page="operator">Settings</button>
+          </nav>
+          <div id="bd-tabs" class="segmented" role="radiogroup" aria-label="View">
+            <button type="button" role="radio" aria-checked="true" data-tab="build">Build</button>
+            <button type="button" role="radio" aria-checked="false" data-tab="caps">Capabilities</button>
+            <button type="button" role="radio" aria-checked="false" data-tab="examples">Your examples <span id="bd-ex-count" class="mono small"></span></button>
           </div>
-          <div class="page-head-controls">
-            <span id="bd-awake" class="inset-pill awake-pill" hidden><span class="rail-icon" data-icon="moon"></span>PC kept awake · safe to leave overnight</span>
-            <div id="bd-tabs" class="segmented" role="radiogroup" aria-label="View">
-              <button type="button" role="radio" aria-checked="true" data-tab="build">Build</button>
-              <button type="button" role="radio" aria-checked="false" data-tab="examples">Your examples <span id="bd-ex-count" class="mono small"></span></button>
-            </div>
-          </div>
+          <span id="bd-awake" class="inset-pill awake-pill" hidden><span class="rail-icon" data-icon="moon"></span>PC kept awake · safe to leave overnight</span>
+          <div class="menu-slot"></div>
         </header>
         <div id="bd-off" class="banner" hidden>
           <span class="banner-text"></span>
@@ -200,36 +180,43 @@
         </div>
 
         <div id="bd-build" class="bd-layout">
-          <section class="bd-main" aria-label="Training progress">
-            <div class="card bd-status">
-              <div class="bd-ring">
-                <div id="bd-dial" class="bd-dial" role="img" aria-label="Overall progress 0 percent">
-                  <div class="bd-dial-center"><span id="bd-pct" class="bd-pct">0%</span><span id="bd-stage-label" class="muted small"></span></div>
-                </div>
-              </div>
+          <section class="bd-orb-panel" aria-label="Training activity">
+            <div id="bd-orb-slot" class="bd-orb-slot"></div>
+            <div class="bd-orb-text">
+              <span id="bd-big" class="bd-big">Ready</span>
+              <span id="bd-status-line" class="bd-orb-sub"></span>
+            </div>
+          </section>
+
+          <section class="card bd-status" aria-label="Status">
+            <div class="bd-status-top">
               <div class="bd-status-text">
-                <span id="bd-status-line" class="label"></span>
-                <span id="bd-headline" class="bd-headline"></span>
-                <span id="bd-times" class="muted small"></span>
+                <div class="bd-title-row"><span id="bd-headline" class="bd-headline"></span><span id="bd-version" class="mono muted"></span></div>
+                <div id="bd-progress" class="bd-progress" role="progressbar" aria-label="Overall progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="bd-progress-bar"></div></div>
+                <div id="bd-times" class="bd-times"></div>
                 <div id="bd-setup" class="bd-setup" hidden>
                   <label class="bd-field"><span class="label">Teacher</span><select id="bd-teacher" class="inset-select mono"></select></label>
                   <span class="bd-field"><span class="label">Student</span><span class="inset-pill mono small">Qwen3.5-4B (qwen3.5:4b)</span></span>
                   <label class="bd-field"><span class="label">Lessons</span><input id="bd-lessons" class="inset-input mono" type="number" min="50" max="5000" step="50" value="1000" /></label>
                   <label class="toggle-chip bd-history"><input id="bd-history" type="checkbox" class="switch" checked />Use questions from your conversations as lesson topics</label>
                 </div>
-                <div id="bd-actions" class="bd-actions"></div>
               </div>
+              <div id="bd-actions" class="bd-actions"></div>
             </div>
             <ol id="bd-stages" class="bd-stages" aria-label="Stages"></ol>
-            <div class="bd-stats">
-              <div class="bd-stat"><span class="label">GPU temperature</span><span id="bd-temp" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-temp-bar"></div></div><span class="label">Pauses at 83°C</span></div>
-              <div class="bd-stat"><span class="label">GPU memory</span><span id="bd-mem" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-mem-bar"></div></div><span id="bd-mem-of" class="label"></span></div>
-              <div class="bd-stat"><span class="label">Training step</span><span id="bd-step" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-step-bar"></div></div><span id="bd-loss" class="label"></span></div>
-              <div class="bd-stat"><span class="label">Lessons</span><span id="bd-lessons-n" class="bd-stat-num">—</span><div class="bd-bar"><div id="bd-lessons-bar" class="ok"></div></div><span id="bd-lessons-note" class="label"></span></div>
+            <div class="bd-bottom">
+              <div class="bd-stats">
+                <div class="bd-stat"><span class="label">Step</span><span id="bd-step" class="bd-stat-num">—</span><span id="bd-step-note" class="bd-stat-note"></span></div>
+                <div class="bd-stat"><span class="label">Loss</span><span class="bd-stat-num"><span id="bd-loss">—</span><span id="bd-loss-trend" class="bd-trend"></span></span><span id="bd-loss-note" class="bd-stat-note"></span></div>
+                <div class="bd-stat"><span class="label">GPU temp</span><span id="bd-temp" class="bd-stat-num">—</span><span class="bd-stat-note">pauses at 83°C</span></div>
+                <div class="bd-stat"><span class="label">VRAM</span><span id="bd-mem" class="bd-stat-num">—</span><span id="bd-mem-of" class="bd-stat-note"></span></div>
+              </div>
+              <div id="bd-log" class="bd-log" aria-label="Build log" aria-live="polite"></div>
             </div>
-            <div id="bd-log" class="inset-box bd-log" aria-label="Build log" aria-live="polite"></div>
           </section>
+        </div>
 
+        <div id="bd-capsview" class="bd-capsview" hidden>
           <aside class="card bd-caps" aria-label="Capabilities">
             <div class="with-action"><h2 class="section-title">Capabilities</h2><span id="bd-cap-name" class="mono label"></span></div>
             <span id="bd-cap-note" class="small muted"></span>
@@ -276,6 +263,7 @@
             <label class="toggle-chip"><input id="mem-auto" type="checkbox" class="switch" />Auto-apply</label>
             <label class="toggle-chip"><input id="mem-pause" type="checkbox" class="switch" />Pause memory</label>
           </div>
+          <div class="menu-slot"></div>
         </header>
         <div class="mem-layout">
           <nav class="card mem-index" aria-label="Memory files">
@@ -322,6 +310,7 @@
           <div class="page-head-controls">
             <button class="rail-btn pill-btn small" type="button" data-page="operator">Settings &amp; security</button>
           </div>
+          <div class="menu-slot"></div>
         </header>
         <section class="card log-panel" aria-label="Log entries">
           <div class="page-tools">
@@ -362,6 +351,7 @@
             <h1 class="page-title">Settings &amp; security</h1>
             <span class="muted">You are the operator. Nothing here changes unless you change it.</span>
           </div>
+          <div class="menu-slot"></div>
         </header>
         <div class="op-layout">
           <div class="op-main">

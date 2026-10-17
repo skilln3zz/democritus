@@ -8,8 +8,9 @@ interaction design, plus the ferrofluid orb, the Training tab and the Coding age
 ## Files
 
 - `mockups/NeuChat.dc.html` — chat, with the thinking orb beside the reply, the coding-agent
-  button in the composer, and no right-hand panel.
-- `mockups/NeuTrain.dc.html` — the Training tab: big ferrofluid orb + status window. DARK theme.
+  button in the composer, no right-hand panel, and the burger menu (click it to see it open).
+- `mockups/NeuTrain.dc.html` — the Training tab: big ferrofluid orb + status window. Drawn in the
+  dark theme only; in the app it follows the theme setting (see Training below).
 - `mockups/NeuSettings.dc.html` — Settings & security: lockdown, permissions (outlined switches),
   security check, activity log.
 - `mockups/NeuCode.dc.html` — the Coding agent page: folder, safety strip, and a conversation that
@@ -19,7 +20,8 @@ interaction design, plus the ferrofluid orb, the Training tab and the Coding age
 The mockups use a design-tool format (`<x-dc>` markup, `{{holes}}`, a `class Component`
 script). Read them for layout, sizes, spacing, shadows, copy and behavior, and for the
 ferrofluid drawing code. Do not ship them; rebuild in the app's own code. The operator
-edited these by hand: where a mockup differs from this text, THE MOCKUP WINS.
+edited these by hand: where a mockup differs from this text, THE MOCKUP WINS, with one exception:
+the Training page's colours follow the theme setting, even though its mockup is drawn dark.
 
 ## The material
 
@@ -78,16 +80,40 @@ Toggle switches must stay visible when off:
 ## Chat (NeuChat)
 
 - Left sidebar card: starts directly with the New conversation pill (accent dot +), then an
-  inset search field, then conversations (the selected one inset with an accent dot), then
-  round icon buttons at the bottom. No logo or app name in the sidebar.
+  inset search field, then conversations (the selected one inset with an accent dot). It ends
+  there: NO icon buttons at the bottom; they all live in the burger menu. No logo or app name.
 - Header pill: conversation title and subtitle, Brain picker (inset pill; dropdown is a raised
-  card with the current model inset), inset "Offline · local" status with a green dot, gear.
+  card with the current model inset), inset "Offline · local" status with a green dot, a
+  "Lockdown on" pill only while Lockdown is on, and the burger menu button at the far right.
 - Messages: user = INSET bubbles aligned right; Democritus = RAISED cards aligned left.
   Reply header shows only the model tag. No "Democritus" name on replies, no status pill.
 - No right-hand Current state / Continuity panel. The chat fills the width. The RAM/VRAM and
-  loaded-model readout lives in the gear menu.
+  loaded-model readout lives in the burger menu.
 - Composer: raised pill; attach button, inset text field, **coding-agent `</>` button (46px round,
   accent-filled when the agent is on)**, then the 54px round accent send button.
+
+## Burger menu (replaces the gear and the sidebar icon buttons)
+
+On every page with a header (Chat and Coding agent in the mockups; Settings too in the app), in
+the same top-right place.
+
+- Button: 46px round, raised, three lines. Pressed in (inset) while open. A 9px accent dot in its
+  corner when any item inside has a badge.
+- Menu: a raised off-white card under the button, ~350px wide, radius 24, same shadow as the
+  Brain dropdown. Rows are full width, min-height 56px: a 38px raised round icon, a bold label and
+  a short muted explanation; a badge or a switch on the right.
+- Order, with an inset hairline divider between groups:
+  1. Navigation: **Memory** (folder icon, badge "20" = updates waiting for review), **Training**
+     (flask), **Activity log** (list), **Settings & security** (shield). Use whatever each of the
+     old sidebar buttons opened.
+  2. **Lockdown** with the outlined switch from Settings, so it stays one click. When on, the
+     header shows a "Lockdown on" pill (accent lock icon, inset) next to "Offline · local".
+  3. **In memory**: the loaded model, its size and where it sits (GPU / RAM), an Unload button,
+     RAM and VRAM bars, and "Recalled this turn".
+- Opens on click; closes on Escape, a click outside, choosing an item, or opening the Brain
+  picker (and the Brain picker closes when the menu opens).
+- Accessibility: aria-haspopup and aria-expanded on the button, role="menu" on the card, arrow
+  keys move between rows, 2px accent focus ring.
 
 ## The ferrofluid orb (the signature element)
 
@@ -110,8 +136,11 @@ component (`<FerroOrb size intensity onEvent>`) and reuse it in all three places
 - **What drives it**: in chat, the rate of thinking tokens; in the coding agent, tool steps and
   tokens while it works (calm while it waits for approval); on the Training tab, training activity.
   Each event raises a target intensity, which decays every frame and is eased toward.
-- Stop the animation loop when nothing is running. Respect `prefers-reduced-motion`
-  (shorter, slower). Keep CPU use negligible.
+- The orb is NEVER completely still while it is visible: when idle it breathes slowly as a smooth
+  drop with very short soft bumps (intensity ~0.08–0.12, no bursts). Ease between states over
+  about a second. Cap idle animation at 30 fps and stop the loop only when the window is hidden or
+  minimised. Draw at devicePixelRatio with at least 900 outline points so edges are smooth.
+  Respect `prefers-reduced-motion` (slower and smaller, but still alive).
 
 ### In chat
 
@@ -131,8 +160,12 @@ component (`<FerroOrb size intensity onEvent>`) and reuse it in all three places
 - Approved / rejected / stopped / agent off: settles to a still drop.
 - Labels: "The agent is working" / "Waiting for your approval" / "The agent is idle" / "The agent is off".
 
-## Training tab (NeuTrain) — its own tab, dark theme
+## Training tab (NeuTrain) — its own tab, follows the theme setting
 
+- Colours follow Light / Dark / Follow system like every other page. Light: the normal off-white
+  palette, the orb in an inset well with a soft drop shadow and no orange halo. Dark: the charcoal
+  palette shown in the mockup, with the halo.
+- Idle / Ready and Paused: the orb breathes calmly (see the orb rules). Training: full spikes.
 - Tab bar at the top: Chat · Memory · **Training** · Settings (active tab raised with an accent dot).
   "PC kept awake · safe to leave overnight" status at the right.
 - Centre: the big orb (380px) in a sunken panel, with "Learning" / "Paused" underneath and a line
@@ -146,7 +179,7 @@ component (`<FerroOrb size intensity onEvent>`) and reuse it in all three places
 ## Coding agent (NeuCode) — its own page, works like the chat
 
 - Header: back button, "Coding agent" title, the chosen folder as an inset mono chip, Change folder,
-  and an Agent on/off button (accent when on). No subtitle.
+  an Agent on/off button (accent when on), and the burger menu. No subtitle.
 - **Safety strip** stated in plain words: "Sandbox: this folder only · Can't run commands ·
   No internet · Every write needs your approval · Step N of 20" (live) and a red **Stop agent**
   button. Stop is greyed out (inset) when nothing is running or waiting.

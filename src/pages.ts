@@ -4,10 +4,16 @@ import { icons } from './icons';
 import { $ } from './ui';
 
 const onShowHandlers = new Map<string, (() => void)[]>();
+const onLeaveHandlers = new Map<string, (() => void)[]>();
 let current = 'chat';
 
 export function onShow(page: string, fn: () => void) {
   onShowHandlers.set(page, [...(onShowHandlers.get(page) ?? []), fn]);
+}
+
+/** Runs when another page replaces this one. */
+export function onLeave(page: string, fn: () => void) {
+  onLeaveHandlers.set(page, [...(onLeaveHandlers.get(page) ?? []), fn]);
 }
 
 export function currentPage(): string {
@@ -15,7 +21,9 @@ export function currentPage(): string {
 }
 
 export function showPage(name: string) {
+  const previous = current;
   current = name;
+  if (previous !== name) for (const fn of onLeaveHandlers.get(previous) ?? []) fn();
   $('#app').dataset.page = name;
   document.querySelectorAll<HTMLElement>('.rail-btn[data-page]').forEach((b) => {
     const on = b.dataset.page === name;

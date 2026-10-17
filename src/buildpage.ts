@@ -1,13 +1,18 @@
-// The Build Democritus page (Steps 6D and 6E): the status of a build with its
-// six stages, GPU temperature and memory, the capabilities of the last built
-// model, and "Your examples" (the rated and edited replies a build learns from).
+// The Training tab (Build Democritus, Steps 6D and 6E;
+// design-neumorphic/mockups/NeuTrain.dc.html). Follows the app theme. The big
+// ferrofluid orb reacts to each lesson and training step, and breathes quietly
+// while idle or paused (it is never still while the page is visible); below it the status window shows
+// the six stages, step, loss, GPU temperature and VRAM, and the live log. Beside
+// the orb: the capabilities of the last built model. "Your examples" lists the
+// rated and edited replies a build learns from.
 // The backend (build.rs) runs the build; this page only shows it and sends
 // Begin / Pause / Resume / Cancel.
 import { listen } from '@tauri-apps/api/event';
 import { api, type Build, type BuildCheck, type BuildOverview, type BuildStage, type BuildSummary, type GpuStats, type TrainingExample } from './api';
-import { icons } from './icons';
+import { icons, logoUrl } from './icons';
+import { FerroOrb, TRAINING_TUNING } from './orb';
 import { getOperator, onOperatorChange } from './operatorpage';
-import { currentPage, onShow } from './pages';
+import { currentPage, onLeave, onShow } from './pages';
 import { $, choose, errorText, escapeText, formatMem, toast } from './ui';
 
 interface Deps {
@@ -15,13 +20,13 @@ interface Deps {
   onDefaultChanged: () => Promise<void>;
 }
 
-const STAGES: { id: BuildStage; label: string }[] = [
-  { id: 'preflight', label: 'Preflight' },
-  { id: 'lessons', label: 'Lessons' },
-  { id: 'training', label: 'Training' },
-  { id: 'packaging', label: 'Packaging' },
-  { id: 'testing', label: 'Testing' },
-  { id: 'done', label: 'Done' },
+const STAGES: { id: BuildStage; label: string; title: string }[] = [
+  { id: 'preflight', label: 'Preflight', title: 'Checking the requirements' },
+  { id: 'lessons', label: 'Lessons', title: 'Writing the lessons' },
+  { id: 'training', label: 'Training', title: 'Training the student' },
+  { id: 'packaging', label: 'Packaging', title: 'Packaging the model' },
+  { id: 'testing', label: 'Testing', title: 'Testing the new model' },
+  { id: 'done', label: 'Done', title: 'Done' },
 ];
 
 let deps: Deps;
@@ -30,8 +35,12 @@ let build: Build | null = null;
 let gpu: GpuStats | null = null;
 let checks: BuildCheck[] | null = null;
 let examples: TrainingExample[] = [];
-let tab: 'build' | 'examples' = 'build';
+type View = 'build' | 'caps' | 'examples';
+let tab: View = 'build';
 let busy = false;
+let orb: FerroOrb | null = null;
+/** Lessons and steps seen so far, so each new one stirs the orb. */
+let seenWork = -1;
 
 // ---------- formatting ----------
 
@@ -48,7 +57,6 @@ const ago = (ms: number) => {
   const mins = Math.round((Date.now() - ms) / 60000);
   return mins < 1 ? 'just now' : mins === 1 ? '1 min ago' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
 };
-const pct = (a: number, b: number) => `${Math.max(0, Math.min(100, b ? (a / b) * 100 : 0)).toFixed(1)}%`;
 const active = () => build && (build.status === 'running' || build.status === 'paused' || build.status === 'failed');
 const blockedReason = (): string | null => {
   const o = getOperator();
@@ -65,20 +73,38 @@ function renderStages() {
   const finished = build?.status === 'done';
   $('#bd-stages').innerHTML = STAGES.map((s, i) => {
     const state = !build ? 'todo' : finished || i < at ? 'done' : i === at ? (build.status === 'running' ? 'now' : build.status === 'failed' ? 'failed' : 'held') : 'todo';
-    const mark = state === 'done' ? `<span class="bd-check">${icons.check}</span>` : `<span class="bd-dot" aria-hidden="true"></span>`;
+    const mark = state === 'done' ? `<span class="bd-check">${icons.check}</span>` : state === 'todo' ? '' : `<span class="bd-dot" aria-hidden="true"></span>`;
     return `<li data-state="${state}"${state === 'now' ? ' aria-current="step"' : ''}>${mark}${s.label}</li>`;
   }).join('');
+}
+
+/** The big orb: lively while a build runs; otherwise a slowly breathing drop, never still. */
+function renderOrb() {
+  if (!orb) return;
+  const b = build;
+  const running = b?.status === 'running';
+  orb.setMode(running ? 'active' : 'calm');
+  orb.setLabel(running ? 'Training in progress' : b?.status === 'paused' ? 'Training paused' : 'Training is idle');
+  // Each new lesson or training step stirs the fluid.
+  const work = b ? b.lessonsDone + b.step : 0;
+  if (b && running && seenWork >= 0 && work > seenWork) orb.event(b.stage === 'training' ? 0.7 : 0.45);
+  seenWork = work;
+  // Nothing animates while it can't be seen.
+  if (!orbVisible()) orb.stop();
+}
+
+/** The orb's page and view are showing (the orb itself pauses while the window is hidden). */
+function orbVisible(): boolean {
+  return currentPage() === 'build' && tab === 'build';
 }
 
 function renderStatus() {
   const b = build;
   const p = b ? (b.status === 'done' ? 100 : b.progress) : 0;
-  const dial = $('#bd-dial');
-  dial.style.setProperty('--p', `${p}%`);
-  dial.setAttribute('aria-label', `Overall progress ${p} percent`);
-  $('#bd-pct').textContent = `${p}%`;
-  const stageLabel = b ? (b.status === 'paused' ? 'Paused' : b.status === 'failed' ? 'Stopped' : b.status === 'cancelled' ? 'Cancelled' : STAGES.find((s) => s.id === b.stage)?.label ?? '') : 'Idle';
-  $('#bd-stage-label').textContent = stageLabel;
+  const bar = $('#bd-progress');
+  bar.setAttribute('aria-valuenow', String(p));
+  bar.dataset.state = b?.status ?? 'idle';
+  $('#bd-progress-bar').style.width = `${p}%`;
 
   const block = blockedReason();
   const off = $('#bd-off');
@@ -86,37 +112,47 @@ function renderStatus() {
   off.querySelector('.banner-text')!.textContent = block ?? '';
 
   $('#bd-setup').hidden = !!active();
-  let line = '';
+  const at = STAGES.findIndex((s) => s.id === (b?.stage ?? 'preflight'));
+  let big = 'Ready';
+  let sub = '';
   let headline = '';
-  let times = '';
+  const times: string[] = [];
   if (!b || (!active() && b.status !== 'done' && b.status !== 'cancelled')) {
-    line = 'Ready when you are';
     headline = 'Build a brain of your own';
-    times = 'A test run (20 lessons, a few training steps) takes 20–40 minutes; a full build is meant to run overnight.';
+    sub = 'Distil a large local model into a small brain of your own';
+    times.push('A test run (20 lessons, a few training steps) takes 20–40 minutes; a full build is meant to run overnight.');
   } else {
-    line = `${b.name}${b.testRun ? ' · test run' : ''} · ${b.statusText}`;
-    if (b.status === 'running') headline = b.eta != null ? `About ${duration(b.eta)} left` : 'Measuring…';
-    else if (b.status === 'paused') headline = 'Paused';
-    else if (b.status === 'failed') headline = 'Stopped';
-    else if (b.status === 'cancelled') headline = 'Cancelled';
-    else headline = `${b.name} is ready`;
-    const bits = [`Started ${clock(b.createdAt)}`];
-    if (b.status === 'running' && b.eta != null) bits.push(`estimated finish ${clock(Date.now() + b.eta * 1000)}`);
-    if (b.finishedAt) bits.push(`finished ${clock(b.finishedAt)}`);
-    if (b.checkpointAt) bits.push(`checkpoint saved ${ago(b.checkpointAt)}`);
-    times = bits.join(' · ');
+    headline =
+      b.status === 'done' ? `${b.name} is ready` : b.status === 'cancelled' ? 'Cancelled' : `Stage ${at + 1} of ${STAGES.length} · ${STAGES[at]?.title ?? ''}`;
+    big = b.status === 'running' ? 'Learning' : b.status === 'paused' ? 'Paused' : b.status === 'failed' ? 'Stopped' : b.status === 'cancelled' ? 'Cancelled' : 'Done';
+    sub =
+      b.status === 'running' && b.stage === 'training' && b.steps
+        ? `Step ${b.step.toLocaleString()} of ${b.steps.toLocaleString()} · the fluid reacts to each training step`
+        : b.status === 'running' && b.stage === 'lessons'
+          ? `Lesson ${b.lessonsDone.toLocaleString()} of ${b.lessonTarget.toLocaleString()} · ${b.lessonsFromYou} from you, the rest written by the teacher`
+          : b.statusText;
+    times.push(`${p}% complete`);
+    if (b.status === 'running') times.push(b.eta != null ? `About ${duration(b.eta)} left` : 'Measuring the time left…');
+    let started = `Started ${clock(b.createdAt)}`;
+    if (b.status === 'running' && b.eta != null) started += ` · finishes ≈ ${clock(Date.now() + b.eta * 1000)}`;
+    if (b.finishedAt) started += ` · finished ${clock(b.finishedAt)}`;
+    times.push(started);
+    if (b.checkpointAt) times.push(`Checkpoint saved ${ago(b.checkpointAt)}`);
   }
-  $('#bd-status-line').textContent = line;
+  $('#bd-big').textContent = big;
+  $('#bd-status-line').textContent = sub;
   $('#bd-headline').textContent = headline;
+  $('#bd-version').textContent = b && (active() || b.status === 'done') ? `${b.name}${b.testRun ? ' · test run' : ''}` : '';
   const t = $('#bd-times');
-  t.textContent = times;
+  t.innerHTML = times.map((x) => `<span>${escapeText(x)}</span>`).join('');
   if (b?.status === 'failed' && b.error) {
     const err = document.createElement('span');
     err.className = 'form-error bd-error';
     err.textContent = b.error;
-    t.append(document.createElement('br'), err);
+    t.append(err);
   }
   renderActions(block);
+  renderOrb();
   $('#bd-awake').hidden = b?.status !== 'running';
   $('#build-badge').hidden = b?.status !== 'running';
 }
@@ -132,9 +168,10 @@ function renderActions(block: string | null) {
     if (b && (b.status === 'done' || b.status === 'cancelled')) html += button('dismiss', 'Close this build');
     html += button('check', 'Check requirements') + button('test', 'Test run · 20 lessons') + button('begin', 'Begin training', 'accent');
   } else if (b.status === 'running') {
-    html = button('pause', 'Pause', 'bd-pause', icons.pause) + button('cancel', 'Cancel build');
+    // Pause sits pressed in while the build runs; paused, Resume is the accent button.
+    html = button('pause', 'Pause', 'bd-pause', icons.pause) + button('cancel', 'Cancel build', 'bd-cancel');
   } else {
-    html = button('resume', b.status === 'failed' ? 'Try again' : 'Resume', 'bd-pause', icons.play) + button('cancel', 'Cancel build');
+    html = button('resume', b.status === 'failed' ? 'Try again' : 'Resume', 'accent bd-resume', icons.play) + button('cancel', 'Cancel build', 'bd-cancel');
   }
   const box = $('#bd-actions');
   box.innerHTML = html;
@@ -148,24 +185,22 @@ function renderStats() {
   const b = build;
   if (gpu) {
     $('#bd-temp').textContent = `${gpu.temp}°C`;
-    const bar = $('#bd-temp-bar');
-    bar.style.width = pct(gpu.temp, 100);
-    bar.className = gpu.temp >= 80 ? 'hot' : gpu.temp >= 70 ? 'warm' : '';
-    $('#bd-mem').textContent = formatMem(gpu.memUsed);
-    $('#bd-mem-bar').style.width = pct(gpu.memUsed, gpu.memTotal);
-    $('#bd-mem-of').textContent = `of ${formatMem(gpu.memTotal)}${b?.vramPeak ? ` · training peak ${formatMem(b.vramPeak)}` : ''}`;
+    $('#bd-temp').dataset.heat = gpu.temp >= 80 ? 'hot' : gpu.temp >= 70 ? 'warm' : '';
+    $('#bd-mem').textContent = `${formatMem(gpu.memUsed).replace(/ GB$/, '')} / ${formatMem(gpu.memTotal)}`;
+    $('#bd-mem-of').textContent = b?.vramPeak ? `training peak ${formatMem(b.vramPeak)}` : '';
   } else {
     $('#bd-temp').textContent = '—';
     $('#bd-mem').textContent = '—';
     $('#bd-mem-of').textContent = 'No NVIDIA GPU found';
   }
   $('#bd-step').textContent = b && b.steps ? `${b.step.toLocaleString()} / ${b.steps.toLocaleString()}` : '—';
-  $('#bd-step-bar').style.width = b ? pct(b.step, b.steps) : '0%';
+  $('#bd-step-note').textContent = b ? `${b.lessonsDone.toLocaleString()} of ${b.lessonTarget.toLocaleString()} lessons` : '';
   const trend = b?.loss != null && b.lossStart != null ? (b.loss < b.lossStart - 0.02 ? 'falling' : b.loss > b.lossStart + 0.02 ? 'rising' : 'steady') : '';
-  $('#bd-loss').textContent = b?.loss != null ? `Loss ${b.loss.toFixed(2)} · ${trend}` : b?.secondsPerStep ? '' : 'Starts after the lessons';
-  $('#bd-lessons-n').textContent = b ? `${b.lessonsDone.toLocaleString()}` : '—';
-  $('#bd-lessons-bar').style.width = b ? pct(b.lessonsDone, b.lessonTarget) : '0%';
-  $('#bd-lessons-note').textContent = b ? `of ${b.lessonTarget.toLocaleString()} · ${b.lessonsFromYou} from you, the rest written by the teacher` : 'Written by the teacher';
+  $('#bd-loss').textContent = b?.loss != null ? b.loss.toFixed(2) : '—';
+  const arrow = $('#bd-loss-trend');
+  arrow.textContent = trend === 'falling' ? ' ↓' : trend === 'rising' ? ' ↑' : '';
+  arrow.dataset.trend = trend;
+  $('#bd-loss-note').textContent = b?.loss != null ? trend : 'starts after the lessons';
 }
 
 function renderLog() {
@@ -412,18 +447,28 @@ async function makeDefault() {
   }
 }
 
-function showTab(t: 'build' | 'examples') {
+function showTab(t: View) {
   tab = t;
   $('#bd-tabs')
     .querySelectorAll<HTMLButtonElement>('[data-tab]')
     .forEach((b) => b.setAttribute('aria-checked', String(b.dataset.tab === t)));
   $('#bd-build').hidden = t !== 'build';
+  $('#bd-capsview').hidden = t !== 'caps';
   $('#bd-examples').hidden = t !== 'examples';
+  // The orb only animates while it can be seen.
+  if (orbVisible()) orb?.start();
+  else orb?.stop();
   if (t === 'examples') void loadExamples();
 }
 
 export function initBuildPage(d: Deps) {
   deps = d;
+  $<HTMLImageElement>('#bd-logo').src = logoUrl;
+  orb = new FerroOrb({ size: 'large', tuning: TRAINING_TUNING, label: 'Training is idle' });
+  $('#bd-orb-slot').append(orb.el);
+  orb.setMode('calm'); // never still: it breathes until a build makes it lively
+  if (!orbVisible()) orb.stop();
+  onLeave('build', () => orb?.stop());
   void listen<Build>('build-changed', (e) => {
     build = e.payload;
     if (build.status === 'done' || build.status === 'failed') void refresh();
@@ -437,6 +482,7 @@ export function initBuildPage(d: Deps) {
     }
   });
   onShow('build', () => {
+    if (orbVisible()) orb?.start();
     void refresh();
     void pollGpu();
     if (tab === 'examples') void loadExamples();
@@ -460,7 +506,7 @@ export function initBuildPage(d: Deps) {
   });
   $('#bd-tabs').addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-tab]');
-    if (b) showTab(b.dataset.tab as 'build' | 'examples');
+    if (b) showTab(b.dataset.tab as View);
   });
   $('#bd-ex-items').addEventListener('change', async (e) => {
     const input = e.target as HTMLInputElement;

@@ -340,6 +340,32 @@ Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safe
    - The Log page shows "security check", "security fix confirmed" and "security fix done/failed".
 8. Attach button in the composer: pick a text file and a binary file (the binary should be refused, as with drag and drop).
 
+## Neumorphic design update (2026-10-17)
+
+Implements the updated `design-neumorphic/` (NEU-SPEC.md and the four mockups; where they differ, the mockups win). No backend changes; app logic and safety rules are unchanged.
+
+- **Orb** (`src/orb.ts`): one `FerroOrb` for chat, the coding agent and the Training tab: 11 cones with their own height, width and drift, bursts every few seconds, the light shading of NeuCode and, on dark backgrounds, the orange halo and rim light of NeuTrain. Modes: active (cones, bursts), calm (no bursts; the agent breathes slowly while it waits for approval) and still (settles, then the loop stops). Reduced motion is respected.
+- **Chat:** no right-hand panel. Models in memory (with Unload and free RAM/VRAM) and "Recalled this turn" moved into the gear menu, next to "Chat & model settings". The current state stays on the start screen's "Last time" card; the project-steps dial is gone. The composer has a `</>` button that opens the Coding agent (accent while the agent is allowed); the Code tile left the sidebar.
+- **Coding agent page:** header with folder chip, Change folder, Brain, New task and an Agent on/off button; a safety strip ("Sandbox: this folder only · Can't run commands · No internet · Every write needs your approval · Step N of 30") with Stop agent (greyed out unless a task runs or waits). No file list. Each request gets one reply card: status line ("Working it out…" / "Worked for X seconds · N steps"), Show thoughts, tool steps as rows, the explanation, and each change as a diff block. After Approve or Reject the buttons are replaced by the result ("Applied ✓ · Written to … · logged · old version kept in …", or "Rejected · Nothing was written…"). Stop, Esc, the Agent button or the Settings switch turned off during a task all call the same stop; the card then says "Stopped by you. Nothing was written to your folder." (or that earlier approved changes stay applied).
+- **Agent on/off button** = the existing **Coding agent** permission (same backend save, logged with old and new values). It reads the current settings from the backend before saving, so it never re-saves a stale copy of the other permissions (a stale copy once re-enabled "Allow model downloads" in the test data). It can't be turned on during Lockdown.
+- **Training tab** (the Build page): follows the app theme (changed later the same day at the operator's request; light: raised panel with the orb in an inset well, no halo; dark: the charcoal palette with the halo), a tab bar (Chat · Memory · Training · Settings), the big orb (lively while a build runs; idle and paused it breathes between 0.08 and 0.12 at 30 fps and is never completely still while visible; it stops only while the window is hidden or another page shows; drawn at devicePixelRatio with 960 outline points), the status window (stage, version, progress bar, times, Pause pressed in while running / Resume in accent, six stages, Step / Loss / GPU temp / VRAM, live log). Capabilities and Your examples are views next to Build.
+- **Dark theme** uses the Training palette (page #17191C, surfaces #202327, accent #E8793A). Switches have the 1.5px outline and the knob a 1px outline.
+- **Left out on purpose** (agreed with the operator, they would need new logic): Undo after Applied (the backup path is shown instead), "Edit first" (the note field next to Reject does that job), thumbs and tok/s on agent replies (agent runs aren't stored as chat messages; the token count is shown), the attach button in the agent composer. The step counter shows the real limit, 30.
+- **Tests:** `scripts/e2e.mjs` follows the new page (Stop is disabled rather than hidden when idle), the `agent` group now reloads the permission through Settings first, and `agentattack` has a new check: switching the agent off while an edit waits ends the task like Stop and writes nothing.
+- **Verified 2026-10-17** on the PC in test mode: `--only=agent` 8/8, `--only=safety` 15/15, `--only=ui` 10/10 (once 9/10 in a combined `ui,safety` run: the next message was sent while the previous reply was still being released; passed on its own), `--only=agentattack --agent-models=qwen3.5:4b` 16/18 (the two failures are the existing KNOWN GAP checks: junction search and refused tool calls not logged). A rejected edit was also checked by hand: buttons replaced by "Rejected", "edit rejected" in the log.
+
+## Burger menu and "orb never still" (2026-10-17, final design archive)
+
+`design-neumorphic/` was replaced by the final archive (spec + mockups; burger menu in NeuChat and NeuCode). Design only; no logic or safety rule changed.
+
+- **Burger menu** (`src/menu.ts`): one menu, moved into the header of the page that is showing (Chat, Coding agent, Training, Memory, Activity log, Settings & security). It replaces the gear and all sidebar icon buttons; the sidebar ends after the conversation list.
+  - Rows: Memory (badge = memory updates waiting), Training (badge "building" while a build runs), Activity log, Settings & security, **Chat & model settings** (added by the operator's choice; the gear used to open it); then the **Lockdown** switch (calls the same `toggleLockdown`, so turning it off still asks first); then **In memory** (loaded models with size, GPU/RAM placement and Unload, RAM and VRAM bars, "Recalled this turn").
+  - Accent dot on the button when a badge is showing. A "Lockdown on" pill appears in the header while Lockdown is on; the chat banner explaining Lockdown stays (operator's choice).
+  - Closes on Escape, outside click, choosing a row, or opening the Brain picker. role="menu", arrow keys, Home/End; focus moves into the menu only when it is opened from the keyboard.
+  - Kept IDs: `#memory-badge`, `#build-badge`, `#lockdown-btn`, `#loaded-btn`, `#loaded-panel`, `#open-settings`, `#cont-recalled`.
+- **Orb** (`src/orb.ts`): never completely still while visible. Quiet states (chat getting ready and answering, agent waiting or done, Training idle or paused) breathe at 0.08–0.12 with soft bumps; states ease over about a second; quiet drawing is capped at 30 fps; all orbs are drawn at devicePixelRatio with 960 points. Each orb pauses only while it can't be seen (IntersectionObserver + window visibility); chat and agent orbs are released (`dispose`) when their reply or task goes away. The agent spec still says "settles to a still drop"; the newer general rule wins.
+- **Tests:** the memory panel check reads the new RAM/VRAM bars. `--only=ui` 10/10, `--only=safety` 15/15. The safety group now switches "Allow model downloads" back to how it found it when it finishes (in a `finally`, through the same Settings switch), so it passes twice in a row and leaves the test permissions as they were.
+
 ## Build Democritus (Steps 6D and 6E, 2026-10-17)
 
 The operator asked to start 6E now (ahead of 6A–6C) with a preflight, approved downloads 0–4 for a 4B student, and asked for 6D first, then the Build page and the brain-picker entry, then a small test run. **Never start a full build without the operator.**
@@ -399,9 +425,9 @@ Built at the operator's request, before Step 6A. Operator's choices: **read and 
 
 ### How it works
 
-- **Code page** (left panel → Code). Pick a project folder, pick a brain (defaults to a `coder` model if one is installed), describe the change, press Enter.
+- **Coding agent page** (the `</>` button in the chat composer). Change folder, pick a brain (defaults to a `coder` model if one is installed), describe the change, press Enter. Since the neumorphic update it works like the chat: one reply card per request with the orb, the tool steps and each proposed change inside it (see "Neumorphic design update").
 - **Tools** (Ollama native tool calling, `/api/chat` with `tools`): `list_files`, `read_file`, `search_files` run straight away; `edit_file` (exact, unique text replacement) and `write_file` (new file or full rewrite) only *plan* a change.
-- **Approval:** each planned change appears as a diff card with **Apply** / **Reject** and an optional note that goes back to the model. The backend waits; nothing is written until Apply. If the file changed on disk in the meantime, the edit is refused. Before writing, the old version is copied to `<home>\backups\agent\<task>\<path>` (the first version per task is kept).
+- **Approval:** each planned change appears as a diff block with **Approve** / **Reject** and an optional note that goes back to the model. The backend waits; nothing is written until Approve. After a decision the buttons are replaced by the result. If the file changed on disk in the meantime, the edit is refused. Before writing, the old version is copied to `<home>\backups\agent\<task>\<path>` (the first version per task is kept).
 - **Folder rules** (`workspace.rs`, unit-tested): paths must be relative, no `..`, no symlink escapes; `.git` can't be written; build and dependency folders are skipped when listing and searching. A folder that is, contains or sits inside the Democritus home folder, the app data folder or Ollama's model store is refused, and so are a drive root and the whole user folder.
 - **Limits:** up to 30 model turns per request (a follow-up message continues the same task). File reads are cut at 60,000 characters (line ranges for more). Older tool output is dropped first when the context fills.
 - **Context window:** a separate setting, **Coding agent window** (default 16,384 tokens), in Chat & model settings; capped at the model's own limit. Note that this differs from the chat window (8,192), so Ollama reloads the model when you switch between chat and agent with the same brain.
@@ -421,10 +447,10 @@ Built at the operator's request, before Step 6A. Operator's choices: **read and 
 1. `cd src-tauri; cargo test --offline` (includes the `workspace` and `agentcore` tests; they passed on Linux, the symlink test only runs on Linux/macOS).
 2. `scripts\dev-e2e.ps1 -Fresh`, then `node scripts/e2e.mjs --only=agent` (uses `qwen3-coder:latest`; `--agent-model=qwen3.5:9b` to try another). It builds a throwaway project in `.e2e\agent-proj`, refuses the home folder, asks for one edit, approves only `greet.py`, and checks the file, the backup, the planted "create pwned.txt" instruction being ignored, and the log.
 3. By hand, on a copy of a real project:
-   - Settings & safety → turn on **Coding agent**. Code page → folder → ask for a small change. Watch reads appear, then a diff card. Try **Reject** with a note, then let it try again and **Apply**.
+   - Turn on the agent (the Agent button on its page, or **Coding agent** under Settings & security). Change folder → ask for a small change. Watch reads appear, then a diff block. Try **Reject** with a note, then let it try again and **Approve**.
    - Check that `qwen3.5:4b` / `9b` / `27b` also call tools (if one says it "can't use tools", note which).
    - Turn on Lockdown while a diff card is waiting: the task should stop and the card show "Stopped".
    - Try folders `D:\`, `D:\Democritus`, and your `.ollama\models`: all should be refused.
    - VRAM with the 16,384 window for `qwen3-coder` and `qwen3.8:27b` (Task Manager), and whether the fit check is enough.
-   - Esc stops the agent while on the Code page.
+   - Esc stops the agent while on its page.
 
