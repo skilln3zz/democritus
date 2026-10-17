@@ -15,6 +15,8 @@ export interface Settings {
   contextTokens: number;
   /** 'system' (follow Windows), 'light' or 'dark'. */
   theme: string;
+  /** Context window for the coding agent. */
+  agentContextTokens: number;
 }
 
 export interface ModelInfo {
@@ -129,6 +131,7 @@ export interface OperatorSettings {
   memoryPaused: boolean;
   allowAutoModelSelect: boolean;
   allowTraining: boolean;
+  allowCodingAgent: boolean;
 }
 
 export interface AppPaths {
@@ -258,6 +261,32 @@ export interface SecurityItem {
   fix: SecurityFix | null;
 }
 
+/** A change the coding agent wants to make, waiting for approval. */
+export interface PlannedEdit {
+  path: string;
+  before: string;
+  after: string;
+  newFile: boolean;
+}
+
+export type AgentEvent =
+  | { type: 'started'; taskId: string; folder: string; numCtx: number }
+  | { type: 'step'; step: number }
+  | { type: 'thinking'; text: string }
+  | { type: 'content'; text: string }
+  | { type: 'toolCall'; callId: string; name: string; summary: string }
+  | { type: 'toolResult'; callId: string; ok: boolean; summary: string }
+  | { type: 'approval'; approvalId: string; callId: string; edit: PlannedEdit }
+  | { type: 'resolved'; approvalId: string; applied: boolean; message: string }
+  | { type: 'done'; status: 'complete' | 'stopped' | 'limit' | 'error'; message: string; editsApplied: number; tokens: number };
+
+export interface AgentRunRequest {
+  taskId: string;
+  folder: string;
+  model: string;
+  message: string;
+}
+
 export interface SendRequest {
   requestId: string;
   conversationId: number;
@@ -310,6 +339,14 @@ export const api = {
   getOperator: () => invoke<OperatorSettings>('get_operator'),
   saveOperator: (settings: OperatorSettings) => invoke<OperatorSettings>('save_operator', { settings }),
   setLockdown: (on: boolean) => invoke<OperatorSettings>('set_lockdown', { on }),
+  agentRun: (req: AgentRunRequest, onEvent: (e: AgentEvent) => void) => {
+    const channel = new Channel<AgentEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>('agent_run', { req, onEvent: channel });
+  },
+  agentRespond: (approvalId: string, approve: boolean, note: string) => invoke<void>('agent_respond', { approvalId, approve, note }),
+  agentStop: () => invoke<void>('agent_stop'),
+  agentForget: (taskId: string) => invoke<void>('agent_forget', { taskId }),
   securityCheck: () => invoke<SecurityItem[]>('security_check'),
   securityFix: (id: string) => invoke<void>('security_fix', { id }),
   readActivity: (limit: number, kind: string, query: string) =>

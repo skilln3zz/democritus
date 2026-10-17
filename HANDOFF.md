@@ -15,6 +15,7 @@ The original app is kept untouched as a backup in `D:\local-qwen-desktop`. **Do 
 | 2 | Home folder and memory | **Code complete** (commit `24704c0`); Windows end-to-end run (`--only=mem`) still to confirm, see "Test on Windows" |
 | 3 | Continuity across model switches | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "Test on Windows" |
 | UI | "Bohemian dusk" redesign, theme switch, Security check (design/UI-SPEC.md) | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "UI redesign" below |
+| Agent | Coding agent (Code page): read/search freely, every edit approved, one folder per task | **Code complete** (cloud session, branch `cloud-work`); needs the Windows run, see "Coding agent" below |
 | 6A | Hardware auto-tuning | Not started |
 | 6B | Feedback loop | Not started |
 | 6C | Memory cleanup proposals | Not started |
@@ -259,4 +260,39 @@ Implements `design/UI-SPEC.md` on top of the existing app. App logic, data, safe
    - Row 6 with your real model store, and with a fake `test.bin` in `D:\Democritus\downloads` (should turn red, and nothing gets deleted).
    - The Log page shows "security check", "security fix confirmed" and "security fix done/failed".
 8. Attach button in the composer: pick a text file and a binary file (the binary should be refused, as with drag and drop).
+
+## Coding agent (cloud session, branch `cloud-work`)
+
+Built at the operator's request, before Step 6A. Operator's choices: **read and edit files only** (no commands), **every edit approved**, **one folder per task**.
+
+### How it works
+
+- **Code page** (left panel → Code). Pick a project folder, pick a brain (defaults to a `coder` model if one is installed), describe the change, press Enter.
+- **Tools** (Ollama native tool calling, `/api/chat` with `tools`): `list_files`, `read_file`, `search_files` run straight away; `edit_file` (exact, unique text replacement) and `write_file` (new file or full rewrite) only *plan* a change.
+- **Approval:** each planned change appears as a diff card with **Apply** / **Reject** and an optional note that goes back to the model. The backend waits; nothing is written until Apply. If the file changed on disk in the meantime, the edit is refused. Before writing, the old version is copied to `<home>\backups\agent\<task>\<path>` (the first version per task is kept).
+- **Folder rules** (`workspace.rs`, unit-tested): paths must be relative, no `..`, no symlink escapes; `.git` can't be written; build and dependency folders are skipped when listing and searching. A folder that is, contains or sits inside the Democritus home folder, the app data folder or Ollama's model store is refused, and so are a drive root and the whole user folder.
+- **Limits:** up to 30 model turns per request (a follow-up message continues the same task). File reads are cut at 60,000 characters (line ranges for more). Older tool output is dropped first when the context fills.
+- **Context window:** a separate setting, **Coding agent window** (default 16,384 tokens), in Chat & model settings; capped at the model's own limit. Note that this differs from the chat window (8,192), so Ollama reloads the model when you switch between chat and agent with the same brain.
+- **Safety switches:** new permission **Coding agent**, off by default. Switching it off, or turning on Lockdown, stops a running task and drops pending approvals. Lockdown also blocks starting a task.
+- **Log:** every task start/finish, each read/list/search, each proposed, applied, rejected or failed edit, and each model request go to the activity log (kind `agent` and `network`; new "Coding agent" filter on the Log page).
+- The model is told that file contents are data, not instructions, and that it can't run commands (it should name the command for you to run instead). Even if a file tricks it, it can only *propose* an edit inside the folder.
+
+### Decisions for the operator
+
+- Task conversations live only in memory for this session (not in the database); the activity log keeps the record. Say if you want them saved like chats.
+- No memory updates from agent tasks: the agent doesn't read or write `D:\Democritus\memory`.
+- There is no "Undo" button yet; restore from the backup folder by hand.
+- The folder is typed in (no folder picker): a picker needs the Tauri dialog plugin, a new dependency. Say if you want it.
+
+### Test on Windows (coding agent)
+
+1. `cd src-tauri; cargo test --offline` (includes the `workspace` and `agentcore` tests; they passed on Linux, the symlink test only runs on Linux/macOS).
+2. `scripts\dev-e2e.ps1 -Fresh`, then `node scripts/e2e.mjs --only=agent` (uses `qwen3-coder:latest`; `--agent-model=qwen3.5:9b` to try another). It builds a throwaway project in `.e2e\agent-proj`, refuses the home folder, asks for one edit, approves only `greet.py`, and checks the file, the backup, the planted "create pwned.txt" instruction being ignored, and the log.
+3. By hand, on a copy of a real project:
+   - Settings & safety → turn on **Coding agent**. Code page → folder → ask for a small change. Watch reads appear, then a diff card. Try **Reject** with a note, then let it try again and **Apply**.
+   - Check that `qwen3.5:4b` / `9b` / `27b` also call tools (if one says it "can't use tools", note which).
+   - Turn on Lockdown while a diff card is waiting: the task should stop and the card show "Stopped".
+   - Try folders `D:\`, `D:\Democritus`, and your `.ollama\models`: all should be refused.
+   - VRAM with the 16,384 window for `qwen3-coder` and `qwen3.8:27b` (Task Manager), and whether the fit check is enough.
+   - Esc stops the agent while on the Code page.
 

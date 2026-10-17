@@ -49,6 +49,11 @@ const TOGGLES: Toggle[] = [
   { key: 'allowDownloads', label: 'Allow model downloads', desc: 'Lets you download model files from the allowlist below. Every download still needs your approval twice.' },
   { key: 'autoApplyMemory', label: 'Auto-apply memory updates', desc: "Apply Democritus's proposed memory changes without asking. When off, you review each change first." },
   { key: 'memoryPaused', label: 'Pause memory', desc: 'Stop proposing and writing memory updates. Existing memory is still used.' },
+  {
+    key: 'allowCodingAgent',
+    label: 'Coding agent',
+    desc: "Let Democritus read a project folder you pick on the Code page and propose changes. Every change waits for your approval; it can't run commands or reach the internet.",
+  },
   { key: 'allowAutoModelSelect', label: 'Automatic brain choice', desc: 'Let Democritus switch to the model that has worked best for a kind of task. Memory and conversation stay the same.' },
   {
     key: 'allowTraining',

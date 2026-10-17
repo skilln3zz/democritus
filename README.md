@@ -14,6 +14,7 @@ Built with [Tauri 2](https://tauri.app): the backend is Rust, and the UI is plai
 - Drag text files into the window to include their contents in your message (up to 1 MB per file).
 - Settings for the system prompt, temperature, max tokens, server URL and server start command.
 - The "Bohemian dusk" look (design/UI-SPEC.md): cream paper panels over a dusk city photo. **Light, Dark or Follow system**, chosen under Settings & safety → Appearance and saved with the other settings.
+- A **coding agent** (Code page, off by default: turn on "Coding agent" under Settings & safety). Pick a project folder and describe a change; the brain lists, reads and searches files in that folder, then proposes each edit as a diff. Nothing is written until you press **Apply**, and the old version is backed up to `<home>\backups\agent\`. It can't leave the folder, run commands or reach the internet. Needs Ollama and a model with tool calling (qwen3-coder works best).
 - A **Security check** under Settings & safety: whether Ollama listens only on 127.0.0.1, whether `OLLAMA_HOST` is local, Windows Firewall outbound block rules for Democritus and Ollama, the Ollama version, Lockdown and download permission, and whether model files are only `.gguf` / `.safetensors`. Fix buttons show the exact PowerShell commands and run nothing until you confirm.
 - A server status indicator. The app starts the model server if it isn't running, and stops it on exit **only if the app started it**.
 - Clear error messages, e.g. when a model needs more memory than you have.
@@ -138,6 +139,7 @@ src/                 UI (TypeScript, no framework)
   markdown.ts        markdown-it + highlight.js + DOMPurify
   theme.ts           Light / Dark / Follow system
   securitypage.ts    the Security check section
+  codepage.ts        the Code page (coding agent)
   ornaments.ts       decorative SVGs (starbursts, dots, checker strip)
   styles.css         theme tokens and layout (design/UI-SPEC.md)
 src-tauri/src/
@@ -147,6 +149,8 @@ src-tauri/src/
   server.rs          detect / start / stop the model server
   db.rs              SQLite schema and queries
   security.rs        Security check commands (secrules.rs: the pure, unit-tested rules)
+  agent.rs           coding agent loop and commands (agentcore.rs: tools and parsing, unit-tested)
+  workspace.rs       the agent's file access: stays inside one folder, plans and applies edits
 scripts/e2e.mjs      end-to-end tests over the DevTools protocol
 design/              UI design handoff; icons come from design/assets/democritus-icon-1024.png
                      (npx tauri icon design/assets/democritus-icon-1024.png)

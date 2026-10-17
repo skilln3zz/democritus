@@ -27,6 +27,7 @@ import { initMemoryPage, onPendingChange } from './memorypage';
 import { initOperatorPage, loadOperator } from './operatorpage';
 import { fillOrnaments, sparkle, starburst } from './ornaments';
 import { currentPage, initRail, showPage } from './pages';
+import { initCodePage } from './codepage';
 import { initSecurityCheck } from './securitypage';
 import { applyTheme, initThemeSwitch, type ThemePref } from './theme';
 import { $, askConfirm, askText, choose, errorText, escapeText, formatBytes, formatMem, newRequestId, relativeTime, sleep, toast } from './ui';
@@ -64,6 +65,7 @@ const els = {
   setTempOut: $<HTMLOutputElement>('#set-temp-out'),
   setMax: $<HTMLInputElement>('#set-max'),
   setCtx: $<HTMLInputElement>('#set-ctx'),
+  setAgentCtx: $<HTMLInputElement>('#set-agent-ctx'),
   setUrl: $<HTMLInputElement>('#set-url'),
   setCmd: $<HTMLInputElement>('#set-cmd'),
   setAutostart: $<HTMLInputElement>('#set-autostart'),
@@ -1064,6 +1066,7 @@ function openSettings() {
   els.setTempOut.textContent = s.temperature.toFixed(2);
   els.setMax.value = String(s.maxTokens);
   els.setCtx.value = String(s.contextTokens);
+  els.setAgentCtx.value = String(s.agentContextTokens);
   els.setUrl.value = s.baseUrl;
   els.setCmd.value = s.serverCommand;
   els.setAutostart.checked = s.autoStartServer;
@@ -1095,12 +1098,19 @@ async function saveSettings(e: SubmitEvent) {
     els.settingsError.hidden = false;
     return;
   }
+  const agentContextTokens = Number(els.setAgentCtx.value);
+  if (!Number.isInteger(agentContextTokens) || agentContextTokens < 4096 || agentContextTokens > 262144) {
+    els.settingsError.textContent = "The coding agent's window must be a whole number between 4096 and 262144.";
+    els.settingsError.hidden = false;
+    return;
+  }
   const next: Settings = {
     ...current,
     systemPrompt: els.setSystem.value,
     temperature: Number(els.setTemp.value),
     maxTokens,
     contextTokens,
+    agentContextTokens,
     baseUrl: els.setUrl.value,
     serverCommand: els.setCmd.value,
     autoStartServer: els.setAutostart.checked,
@@ -1278,6 +1288,7 @@ async function init() {
   $<HTMLImageElement>('#band-icon').src = logoUrl;
   initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
   initSecurityCheck();
+  initCodePage({ ensureModelFits, defaultModel: () => state.settings?.defaultModel ?? '' });
   onPendingChange((n) => {
     pendingUpdates = n;
     renderReviewChip();

@@ -79,6 +79,7 @@
             <div id="conversation-list"></div>
             <div id="sidebar-empty" class="muted small" hidden>No conversations yet</div>
             <nav class="side-nav" aria-label="Pages">
+              <button class="rail-btn nav-link" type="button" data-page="code">Code</button>
               <button class="rail-btn nav-link" type="button" data-page="memory">Memory<span id="memory-badge" class="rail-badge" hidden></span></button>
               <button class="rail-btn nav-link" type="button" data-page="operator">Settings &amp; safety</button>
               <button class="rail-btn nav-link" type="button" data-page="log">Activity log</button>
@@ -127,6 +128,65 @@
             </section>
             <div class="caps muted cont-foot"><span id="cont-recalled">Recalled · —</span><span data-orn="dots" data-first="open"></span></div>
           </aside>
+        </div>
+      </section>
+
+      <!-- ================= CODE (coding agent) ================= -->
+      <section id="page-code" class="page" aria-label="Code" hidden>
+        <header class="band">
+          <div class="band-bg" aria-hidden="true"></div>
+          <div class="band-left">
+            <button class="rail-btn back-link" type="button" data-page="chat"><span class="rail-icon" data-icon="back"></span>Chat</button>
+            <div class="caps-stack"><span class="ink">Coding agent</span><span class="muted">Reads freely · every edit needs your OK</span></div>
+          </div>
+          <div class="band-mid">
+            <div class="wordmark-row">
+              <span data-orn="sparkle" class="accent"></span>
+              <h1 class="wordmark">CODE</h1>
+              <span data-orn="sparkle" class="accent"></span>
+            </div>
+            <span id="code-folder-caps" class="caps muted">No folder chosen</span>
+          </div>
+          <div class="band-right">
+            <div class="brain-row">
+              <label class="brain-picker" for="code-model">
+                <span class="caps muted">Brain</span>
+                <select id="code-model"></select>
+                <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+              </label>
+            </div>
+            <div class="caps muted status-line"><span data-orn="dots"></span><span id="code-status">Idle</span></div>
+          </div>
+        </header>
+        <div id="code-off" class="banner" hidden>
+          <span class="banner-text"></span>
+          <button class="rail-btn btn small" type="button" data-page="operator">Settings &amp; safety</button>
+        </div>
+        <div class="page-row code-row">
+          <aside class="panel panel-left code-side" aria-label="Project">
+            <div class="caps muted section-head">Project folder</div>
+            <label for="code-folder" class="sr-only">Project folder</label>
+            <input id="code-folder" type="text" placeholder="D:\projects\my-app" spellcheck="false" autocomplete="off" />
+            <p class="small muted">The agent sees and changes only files inside this folder. It can't run commands or reach the internet. Democritus's own folders and model files are off limits.</p>
+            <button id="code-new" class="btn small" type="button">New task</button>
+            <div class="caps muted section-head">Changed in this task</div>
+            <ul id="code-files" class="code-files"></ul>
+            <div class="caps muted section-head">Backups</div>
+            <p id="code-backups" class="small muted"></p>
+            <p id="code-ctx" class="small muted"></p>
+          </aside>
+          <main class="code-main">
+            <section id="code-log" class="code-log" aria-label="Agent transcript" aria-live="polite"></section>
+            <footer class="composer-band">
+              <div class="composer-box">
+                <label for="code-input" class="sr-only">Task for the coding agent</label>
+                <textarea id="code-input" rows="1" placeholder="Describe the change…" spellcheck="true"></textarea>
+                <button id="code-send" class="send-diamond" type="button" title="Start (Enter)" aria-label="Start"></button>
+                <button id="code-stop" class="send-diamond stop" type="button" title="Stop (Esc)" aria-label="Stop the agent" hidden></button>
+              </div>
+              <div class="composer-hint caps muted"><span data-orn="dots"></span><span>Every edit waits for Apply</span><span class="spacer"></span><span>Enter · start</span><span>Shift+Enter · new line</span><span>Esc · stop</span></div>
+            </footer>
+          </main>
         </div>
       </section>
 
@@ -215,6 +275,7 @@
                 <option value="setting">Settings</option>
                 <option value="security">Security</option>
                 <option value="model">Models</option>
+                <option value="agent">Coding agent</option>
               </select>
               <label for="log-search" class="sr-only">Filter</label>
               <input id="log-search" type="search" placeholder="Filter…" spellcheck="false" />
@@ -364,6 +425,10 @@
           <label class="field">
             <span>Context window</span>
             <input id="set-ctx" type="number" min="2048" max="262144" step="1024" />
+          </label>
+          <label class="field">
+            <span>Coding agent window</span>
+            <input id="set-agent-ctx" type="number" min="4096" max="262144" step="1024" />
           </label>
         </div>
         <p class="muted small">Thinking tokens count toward the max-token limit. If a reply stops mid-thought, raise it. The context window holds memory and the conversation; older messages are summarized when it fills up. A bigger window needs more RAM/VRAM.</p>
