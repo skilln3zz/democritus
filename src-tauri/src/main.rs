@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod agent;
+mod agentcore;
 mod context;
 mod db;
 mod home;
@@ -20,6 +22,7 @@ mod security;
 mod server;
 mod sysmem;
 mod think;
+mod workspace;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -50,6 +53,8 @@ pub struct AppState {
     lockdown: std::sync::atomic::AtomicBool,
     /// Wakes the background memory worker.
     memory_notify: Notify,
+    /// The coding agent's tasks and pending edit approvals.
+    agent: agent::AgentHub,
 }
 
 impl AppState {
@@ -111,6 +116,9 @@ fn save_settings(state: State<AppState>, settings: db::Settings) -> CmdResult<db
     }
     if !(2048..=262_144).contains(&s.context_tokens) {
         return Err("The context window must be between 2048 and 262144 tokens.".into());
+    }
+    if !(4096..=262_144).contains(&s.agent_context_tokens) {
+        return Err("The coding agent's context window must be between 4096 and 262144 tokens.".into());
     }
     if !["system", "light", "dark"].contains(&s.theme.as_str()) {
         return Err("The theme must be light, dark or system.".into());
@@ -594,6 +602,7 @@ fn main() {
                 download_cancel: Notify::new(),
                 lockdown: std::sync::atomic::AtomicBool::new(lockdown),
                 memory_notify: Notify::new(),
+                agent: agent::AgentHub::default(),
             });
             tauri::async_runtime::spawn(memcmds::worker(app.handle().clone()));
 
@@ -636,6 +645,10 @@ fn main() {
             safety_cmds::respond_approval,
             security::security_check,
             security::security_fix,
+            agent::agent_run,
+            agent::agent_respond,
+            agent::agent_stop,
+            agent::agent_forget,
             memcmds::memory_overview,
             memcmds::memory_read,
             memcmds::memory_write,

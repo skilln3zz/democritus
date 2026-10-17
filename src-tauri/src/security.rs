@@ -85,7 +85,7 @@ fn env_sources(name: &str) -> Vec<(&'static str, String)> {
     out
 }
 
-fn ollama_models_dir() -> PathBuf {
+pub(crate) fn ollama_models_dir() -> PathBuf {
     if let Some((_, v)) = env_sources("OLLAMA_MODELS").into_iter().next() {
         if !v.trim().is_empty() {
             return PathBuf::from(expand_env(v.trim(), |n| std::env::var(n).ok()));

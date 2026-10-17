@@ -28,6 +28,9 @@ pub struct OperatorSettings {
     pub allow_auto_model_select: bool,
     /// Allow local fine-tuning runs (also needs downloads the operator approves).
     pub allow_training: bool,
+    /// Let the coding agent read a project folder and propose edits (each edit
+    /// still needs the operator's approval).
+    pub allow_coding_agent: bool,
 }
 
 impl Default for OperatorSettings {
@@ -40,6 +43,7 @@ impl Default for OperatorSettings {
             memory_paused: false,
             allow_auto_model_select: false,
             allow_training: false,
+            allow_coding_agent: false,
         }
     }
 }
@@ -211,7 +215,7 @@ mod tests {
     #[test]
     fn defaults_are_all_off() {
         let s = OperatorSettings::default();
-        assert!(!s.lockdown && !s.allow_downloads && !s.auto_apply_memory && !s.memory_paused && !s.allow_auto_model_select && !s.allow_training);
+        assert!(!s.lockdown && !s.allow_downloads && !s.auto_apply_memory && !s.memory_paused && !s.allow_auto_model_select && !s.allow_training && !s.allow_coding_agent);
         assert_eq!(s.download_allowlist, vec!["https://huggingface.co/Qwen/"]);
     }
 

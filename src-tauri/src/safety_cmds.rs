@@ -50,6 +50,10 @@ pub fn apply_operator(state: &AppState, next: OperatorSettings) -> CmdResult<Ope
     if changes.is_empty() {
         return Ok(next);
     }
+    // Lockdown, or switching the permission off, stops a running coding task.
+    if (next.lockdown && !before.lockdown) || (!next.allow_coding_agent && before.allow_coding_agent) {
+        crate::agent::stop_all(state);
+    }
     if next.lockdown != before.lockdown {
         if next.lockdown {
             // Drop anything waiting for approval and abort a running download.

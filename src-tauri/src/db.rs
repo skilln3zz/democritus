@@ -61,6 +61,8 @@ pub struct Settings {
     pub context_tokens: u32,
     /// Appearance: "system" (follow Windows), "light" or "dark".
     pub theme: String,
+    /// Context window for the coding agent (file contents need more room than chat).
+    pub agent_context_tokens: u32,
 }
 
 impl Default for Settings {
@@ -79,6 +81,7 @@ impl Default for Settings {
             active_project: String::new(),
             context_tokens: 8192,
             theme: "system".into(),
+            agent_context_tokens: 16384,
         }
     }
 }
