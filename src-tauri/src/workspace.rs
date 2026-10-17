@@ -430,6 +430,106 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Windows path forms: drive-relative, UNC and verbatim prefixes, backslash
+    /// "..", junctions (no admin needed, unlike symlinks) and .git in any case.
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_stay_inside_the_folder() {
+        let (dir, ws) = setup("ws-win");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "outside").unwrap();
+        for p in [
+            "C:secret.txt",
+            "C:\\Windows\\win.ini",
+            "D:/secret.txt",
+            "\\\\localhost\\c$\\Windows\\win.ini",
+            "\\\\?\\C:\\Windows\\win.ini",
+            "//?/C:/Windows/win.ini",
+            "\\\\.\\PhysicalDrive0",
+            "src\\..\\..\\secret.txt",
+            "..\\secret.txt",
+            "src/..\\../secret.txt",
+        ] {
+            assert!(ws.resolve(p).is_err(), "{p} should be refused");
+            assert!(ws.plan_write(p, "x").is_err(), "{p} should not be writable");
+        }
+        // Names Win32 would normalize: whatever they resolve to must stay inside.
+        for p in [".. \\secret.txt", "..\u{2024}\\secret.txt", "...\\secret.txt", "src.\\main.rs", "src \\main.rs"] {
+            if let Ok(r) = ws.resolve(p) {
+                assert!(r.starts_with(ws.root()), "{p} resolved to {}", r.display());
+            }
+        }
+        // A junction inside the project that points outside it.
+        let junction = ws.root().join("jx");
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&junction).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "mklink /J failed: {made:?}");
+        assert!(ws.resolve("jx/secret.txt").unwrap_err().contains("outside"));
+        assert!(ws.read("jx/secret.txt", None, None).is_err());
+        assert!(ws.plan_write("jx/new.txt", "x").is_err());
+        assert!(ws.plan_edit("jx/secret.txt", "outside", "inside").is_err());
+        assert!(!outside.join("new.txt").exists());
+        // .git is protected whatever the case.
+        std::fs::write(ws.root().join(".git/config"), "[core]\n").unwrap();
+        assert!(ws.plan_write(".GIT/config", "x").unwrap_err().contains(".git"));
+        assert!(ws.plan_write(".Git\\hooks\\pre-commit", "x").unwrap_err().contains(".git"));
+        let _ = std::fs::remove_dir(&junction);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Known gap (review 2026-10-17): list_files and search_files walk into a
+    /// junction or symlink inside the project and read what lies outside it.
+    /// Un-ignore once the walk skips links that resolve outside the root.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "known gap: list/search follow junctions out of the project"]
+    fn list_and_search_do_not_follow_junctions_out() {
+        let (dir, ws) = setup("ws-walk");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "topsecret
+").unwrap();
+        let junction = ws.root().join("jx");
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&junction).arg(&outside).output().unwrap();
+        assert!(made.status.success(), "mklink /J failed: {made:?}");
+        let found = ws.search("topsecret", ".").unwrap();
+        let listed = ws.list(".", 3).unwrap();
+        let _ = std::fs::remove_dir(&junction);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!found.contains("jx/"), "{found}");
+        assert!(!listed.contains("secret.txt"), "{listed}");
+    }
+
+    /// Known gap (review 2026-10-17): an approved edit to a hard link inside
+    /// the project changes the linked file outside it.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "known gap: edits through hard links reach files outside the project"]
+    fn edits_refuse_hard_links_to_outside_files() {
+        let (dir, ws) = setup("ws-hardlink");
+        std::fs::write(dir.join("victim.txt"), "original
+").unwrap();
+        std::fs::hard_link(dir.join("victim.txt"), ws.root().join("hl.txt")).unwrap();
+        let r = ws.plan_edit("hl.txt", "original", "changed").and_then(|e| ws.apply(&e, &dir.join("b")));
+        let victim = std::fs::read_to_string(dir.join("victim.txt")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(r.is_err() && victim == "original
+", "{r:?} / {victim:?}");
+    }
+
+    /// Known gap (review 2026-10-17): reserved device names, trailing dots and
+    /// alternate data streams are written literally (hard to delete, or hidden).
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "known gap: Windows reserved names and streams are accepted"]
+    fn refuses_reserved_windows_names() {
+        let (dir, ws) = setup("ws-names");
+        for p in ["nul", "con.txt", "aux", "COM1.log", "name.", "README.md:hidden"] {
+            assert!(ws.plan_write(p, "x").is_err(), "{p} should be refused");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn crlf_files_match_lf_edits() {
         let (dir, ws) = setup("ws-crlf");
