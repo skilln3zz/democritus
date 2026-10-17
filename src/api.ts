@@ -17,7 +17,11 @@ export interface Settings {
   theme: string;
   /** Context window for the coding agent. */
   agentContextTokens: number;
+  /** How a reply shows its thinking. */
+  thinkingDisplay: ThinkingDisplay;
 }
+
+export type ThinkingDisplay = 'orb' | 'thoughts' | 'both';
 
 export interface ModelInfo {
   id: string;
@@ -50,6 +54,10 @@ export interface MessageStats {
   tokensPerSecond?: number;
   finishReason?: string;
   context?: ContextReport;
+  /** From the first thinking token until the answer started. */
+  thinkingMs?: number;
+  /** Thinking pieces received (about one token each). */
+  thoughts?: number;
 }
 
 /** What went into a request (saved with each reply). */
@@ -316,6 +324,7 @@ export const api = {
   unloadModel: (model: string) => invoke<void>('unload_model', { model }),
   memoryInfo: () => invoke<MemoryInfo>('memory_info'),
   modelFit: (model: string) => invoke<FitReport | null>('model_fit', { model }),
+  modelSpeeds: () => invoke<Record<string, number>>('model_speeds'),
   listConversations: (query: string) => invoke<Conversation[]>('list_conversations', { query: query || null }),
   createConversation: (title: string, model: string) => invoke<Conversation>('create_conversation', { title, model }),
   renameConversation: (id: number, title: string) => invoke<void>('rename_conversation', { id, title }),

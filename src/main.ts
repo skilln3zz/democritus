@@ -1,9 +1,8 @@
 // Fonts are bundled from npm (SIL Open Font License); nothing loads from the web.
-import '@fontsource/italiana/400.css';
-import '@fontsource/manrope/400.css';
-import '@fontsource/manrope/500.css';
-import '@fontsource/manrope/600.css';
-import '@fontsource/manrope/700.css';
+import '@fontsource/fraunces/600.css';
+import '@fontsource/figtree/500.css';
+import '@fontsource/figtree/600.css';
+import '@fontsource/figtree/700.css';
 import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
@@ -18,14 +17,15 @@ import {
   type ServerStatus,
   type Settings,
   type StreamEvent,
+  type ThinkingDisplay,
 } from './api';
 import { renderMarkdown } from './markdown';
-import { icons, logo, logoUrl } from './icons';
+import { icons, logo } from './icons';
 import { initLogPage } from './logpage';
 import { listen } from '@tauri-apps/api/event';
 import { initMemoryPage, onPendingChange } from './memorypage';
 import { initOperatorPage, loadOperator } from './operatorpage';
-import { fillOrnaments, sparkle, starburst } from './ornaments';
+import { Orb } from './orb';
 import { currentPage, initRail, showPage } from './pages';
 import { initCodePage } from './codepage';
 import { initFirewallWarning, initSecurityCheck } from './securitypage';
@@ -43,8 +43,12 @@ const els = {
   sidebarEmpty: $('#sidebar-empty'),
   modelSelect: $<HTMLSelectElement>('#model-select'),
   refreshModels: $<HTMLButtonElement>('#refresh-models'),
+  brainBtn: $<HTMLButtonElement>('#brain-btn'),
+  brainName: $('#brain-name'),
+  brainMenu: $('#brain-menu'),
+  brainOptions: $('#brain-options'),
   status: $<HTMLButtonElement>('#server-status'),
-  statusLabel: $('#server-status .label'),
+  statusLabel: $('#server-status .status-label'),
   openSettings: $<HTMLButtonElement>('#open-settings'),
   banner: $('#banner'),
   bannerText: $('#banner .banner-text'),
@@ -55,7 +59,6 @@ const els = {
   input: $<HTMLTextAreaElement>('#input'),
   send: $<HTMLButtonElement>('#send'),
   stop: $<HTMLButtonElement>('#stop'),
-  composerHint: $('.composer-hint'),
   settingsDialog: $<HTMLDialogElement>('#settings-dialog'),
   settingsForm: $<HTMLFormElement>('#settings-form'),
   settingsCancel: $<HTMLButtonElement>('#settings-cancel'),
@@ -71,6 +74,7 @@ const els = {
   setAutostart: $<HTMLInputElement>('#set-autostart'),
   setHome: $<HTMLInputElement>('#set-home'),
   setHelper: $<HTMLSelectElement>('#set-helper'),
+  setThinking: $<HTMLSelectElement>('#set-thinking'),
   projectSelect: $<HTMLSelectElement>('#project-select'),
   confirmDialog: $<HTMLDialogElement>('#confirm-dialog'),
   confirmText: $('#confirm-text'),
@@ -78,15 +82,16 @@ const els = {
   loadedBtn: $<HTMLButtonElement>('#loaded-btn'),
   loadedPanel: $('#loaded-panel'),
   toasts: $('#toasts'),
-  convNumber: $('#conv-number'),
-  convCaps: $('#conv-caps'),
-  convTitleCaps: $('#conv-title-caps'),
-  brainSpeed: $('#brain-speed'),
+  convTitle: $('#conv-title'),
+  convSub: $('#conv-sub'),
   contState: $('#cont-state'),
   contNext: $('#cont-next'),
   contStepsWrap: $('#cont-steps-wrap'),
   contStepsHead: $('#cont-steps-head'),
-  contSteps: $('#cont-steps'),
+  contDial: $('#cont-dial'),
+  contDialText: $('#cont-dial-text'),
+  contStepNow: $('#cont-step-now'),
+  contStepNext: $('#cont-step-next'),
   contRecalled: $('#cont-recalled'),
   attach: $<HTMLButtonElement>('#attach'),
   attachInput: $<HTMLInputElement>('#attach-input'),
@@ -109,6 +114,12 @@ interface Generation {
   stopRequested: boolean;
   /** Progress shown before the first token (e.g. "Summarizing…"). */
   statusText: string;
+  /** The thinking orb beside this reply (not in "Show thoughts" mode). */
+  orb: Orb | null;
+  /** Thinking pieces so far (about one token each), and when thinking started and ended. */
+  thoughts: number;
+  thinkStart: number | null;
+  thinkEnd: number | null;
   finished: Promise<void>;
   markFinished: () => void;
 }
@@ -183,7 +194,7 @@ function applyStatus(s: ServerStatus) {
   state.server = s;
   els.status.dataset.state = s.state;
   els.statusLabel.textContent =
-    s.state === 'connected' ? 'Offline · localhost' : s.state === 'starting' ? 'Starting server…' : 'Server disconnected';
+    s.state === 'connected' ? 'Offline · local' : s.state === 'starting' ? 'Starting server…' : 'Server disconnected';
   els.status.title =
     s.state === 'connected'
       ? `Model server at ${s.baseUrl}${s.startedByApp ? ' (started by this app)' : ''}`
@@ -346,12 +357,70 @@ function renderModels() {
   if (state.models.length === 0) {
     sel.add(new Option(state.server?.state === 'connected' ? 'No models installed' : 'Server not connected', ''));
     sel.disabled = true;
+    closeBrainMenu();
+    renderBrain();
     return;
   }
   sel.disabled = false;
   for (const m of state.models) sel.add(new Option(modelLabel(m), m.id));
   const conv = state.conversations.find((c) => c.id === state.currentId);
   selectModel(conv?.model || previous || state.settings?.defaultModel);
+}
+
+// ---------- brain picker (the native select stays the source of truth) ----------
+
+let speeds: Record<string, number> = {};
+
+function renderBrain() {
+  const sel = els.modelSelect;
+  els.brainName.textContent = sel.value || sel.options[sel.selectedIndex]?.text || '—';
+  els.brainBtn.disabled = sel.disabled;
+  if (els.brainMenu.hidden) return;
+  const helper = state.settings?.memoryHelperModel;
+  els.brainOptions.innerHTML = state.models
+    .map((m) => {
+      const details = [m.parameterSize, m.quantization, m.sizeBytes != null ? formatBytes(m.sizeBytes) : null].filter(Boolean);
+      if (m.id === helper) details.push('memory helper');
+      const speed = speeds[m.id] ? `${speeds[m.id]} tok/s` : '';
+      return (
+        `<button type="button" class="brain-option" role="option" aria-selected="${m.id === sel.value}" data-model="${escapeText(m.id)}">` +
+        `<span class="opt-main"><span class="opt-id">${escapeText(m.id)}</span><span class="opt-note">${escapeText(details.join(' · '))}</span></span>` +
+        `<span class="opt-speed">${speed}</span></button>`
+      );
+    })
+    .join('');
+}
+
+function openBrainMenu() {
+  if (els.brainBtn.disabled) return;
+  els.brainMenu.hidden = false;
+  els.brainBtn.setAttribute('aria-expanded', 'true');
+  renderBrain();
+  (els.brainOptions.querySelector<HTMLElement>('[aria-selected="true"]') ?? els.brainOptions.querySelector<HTMLElement>('.brain-option'))?.focus();
+  void api
+    .modelSpeeds()
+    .then((s) => {
+      speeds = s;
+      if (els.brainMenu.hidden) return;
+      const focused = (document.activeElement as HTMLElement | null)?.dataset.model;
+      renderBrain();
+      if (focused) els.brainOptions.querySelector<HTMLElement>(`[data-model="${CSS.escape(focused)}"]`)?.focus();
+    })
+    .catch(() => {});
+}
+
+function closeBrainMenu(focusButton = false) {
+  if (els.brainMenu.hidden) return;
+  els.brainMenu.hidden = true;
+  els.brainBtn.setAttribute('aria-expanded', 'false');
+  if (focusButton) els.brainBtn.focus();
+}
+
+function pickBrain(model: string) {
+  closeBrainMenu(true);
+  if (model === els.modelSelect.value) return;
+  els.modelSelect.value = model;
+  els.modelSelect.dispatchEvent(new Event('change'));
 }
 
 // ---------- projects ----------
@@ -406,6 +475,7 @@ function selectModel(id?: string | null) {
   else if (has(fallback)) els.modelSelect.value = fallback!;
   else if (state.models.length) els.modelSelect.value = state.models[0].id;
   state.activeModel = els.modelSelect.value;
+  renderBrain();
 }
 
 // ---------- sidebar ----------
@@ -453,8 +523,8 @@ function renderConversations() {
   const sections = [...groups].map(([slug, list]) => {
     const box = document.createElement('div');
     box.className = 'conv-group';
-    const name = slug ? `Project · ${projects.find((p) => p.slug === slug)?.title ?? slug}` : groups.size > 1 ? 'Loose pages' : 'Conversations';
-    box.innerHTML = `<div class="caps muted group-head"><span class="group-name"></span><span>${String(list.length).padStart(2, '0')}</span></div><ul class="conv-items"></ul>`;
+    const name = slug ? `Project · ${projects.find((p) => p.slug === slug)?.title ?? slug}` : groups.size > 1 ? 'Other' : 'Conversations';
+    box.innerHTML = `<div class="group-head"><span class="group-name"></span></div><ul class="conv-items"></ul>`;
     box.querySelector('.group-name')!.textContent = name;
     box.querySelector('ul')!.append(...list.map(convItem));
     return box;
@@ -465,14 +535,13 @@ function renderConversations() {
   renderHeader();
 }
 
-/** Conversation number and title in the top band; speed of the last reply. */
+/** Conversation title, and "· N messages · M brains used" after the project picker. */
 function renderHeader() {
   const conv = state.conversations.find((c) => c.id === state.currentId);
-  els.convNumber.textContent = conv ? `N° ${convNumber(conv.id)}` : 'N° —';
-  els.convCaps.textContent = conv ? (projects.find((p) => p.slug === conv.project)?.title ?? 'Loose page') : 'New conversation';
-  els.convTitleCaps.textContent = conv ? `“${conv.title}”` : '“A private assistant on this computer”';
-  const last = [...state.messages].reverse().find((m) => m.role === 'assistant' && m.stats?.tokensPerSecond);
-  els.brainSpeed.textContent = last?.stats?.tokensPerSecond ? `${last.stats.tokensPerSecond} tok/s` : '';
+  els.convTitle.textContent = conv?.title ?? 'New conversation';
+  const n = state.messages.length;
+  const brains = new Set(state.messages.filter((m) => m.role === 'assistant' && m.model).map((m) => m.model)).size;
+  els.convSub.textContent = conv ? [`${n} message${n === 1 ? '' : 's'}`, brains > 1 ? `${brains} brains used` : ''].filter(Boolean).join(' · ') : '';
 }
 
 function startRename(li: HTMLElement, id: number) {
@@ -580,27 +649,28 @@ async function renderSteps() {
   const steps = [...text.matchAll(/^\s*[-*+]\s+\[( |x|X)\]\s+(.+)$/gm)].map((m) => ({ done: m[1] !== ' ', text: m[2].trim() }));
   els.contStepsWrap.hidden = steps.length === 0;
   if (!steps.length) return;
-  const current = steps.findIndex((s) => !s.done);
-  els.contStepsHead.textContent = current === -1 ? `Project · all ${steps.length} done` : `Project · ${current + 1} of ${steps.length}`;
-  els.contSteps.innerHTML = steps
-    .map(
-      (s, i) =>
-        `<li class="${s.done ? 'done' : i === current ? 'current' : ''}"><span class="mono">${String(i + 1).padStart(2, '0')}</span>` +
-        `<span>${escapeText(s.text)}${i === current ? ` ${starburst(11, 'accent')}` : ''}</span></li>`,
-    )
-    .join('');
+  const done = steps.filter((s) => s.done).length;
+  const current = steps.find((s) => !s.done);
+  const next = current ? steps.slice(steps.indexOf(current) + 1).find((s) => !s.done) : undefined;
+  els.contDial.style.setProperty('--p', `${Math.round((done / steps.length) * 100)}%`);
+  els.contDial.setAttribute('aria-label', `Project progress ${done} of ${steps.length} steps`);
+  els.contDialText.textContent = `${done}/${steps.length}`;
+  els.contStepsHead.textContent = `Project ${projects.find((p) => p.slug === slug)?.title ?? slug}`;
+  els.contStepNow.textContent = current?.text ?? `All ${steps.length} steps done`;
+  els.contStepNext.textContent = next ? `Next: ${next.text}` : '';
 }
 
+/** The memory files and notes the last reply was given. */
 function renderRecalled() {
   const last = [...state.messages].reverse().find((m) => m.role === 'assistant' && m.stats?.context);
   const c = last?.stats?.context;
-  if (!c) {
-    els.contRecalled.textContent = 'Recalled · —';
+  if (!c || (!c.memoryFiles.length && !c.searchHits)) {
+    els.contRecalled.textContent = '—';
     els.contRecalled.removeAttribute('title');
     return;
   }
-  const n = c.memoryFiles.length;
-  els.contRecalled.textContent = `Recalled · ${n} file${n === 1 ? '' : 's'}${c.searchHits ? ` · ${c.searchHits} note${c.searchHits === 1 ? '' : 's'}` : ''}`;
+  const notes = c.searchHits ? `<span class="muted">+ ${c.searchHits} related note${c.searchHits === 1 ? '' : 's'}</span>` : '';
+  els.contRecalled.innerHTML = c.memoryFiles.map((f) => `<span>${escapeText(f)}</span>`).join('') + notes;
   els.contRecalled.title = handoffText(c);
 }
 
@@ -656,9 +726,9 @@ function switchEl(from: string, m: Message): HTMLElement {
   el.dataset.for = String(m.id);
   el.setAttribute('role', 'separator');
   el.innerHTML =
-    `<div class="brain-switch-line"><span class="rule"></span>${sparkle('accent')}` +
-    `<span>Brain switched to <strong>${escapeText(m.model)}</strong> <span class="was">(was ${escapeText(from)})</span> · handoff passed</span>` +
-    `${sparkle('accent')}<span class="rule"></span></div><div class="handoff-note small"></div>`;
+    `<div class="brain-switch-line">${icons.switchArrows}` +
+    `<span>Brain switched to <strong>${escapeText(m.model)}</strong> (was ${escapeText(from)}) · handoff passed</span></div>` +
+    `<div class="handoff-note"></div>`;
   el.querySelector('.handoff-note')!.textContent = handoffText(m.stats?.context);
   return el;
 }
@@ -695,17 +765,37 @@ function renderMessages() {
   scrollToBottom();
 }
 
+function thinkingDisplay(): ThinkingDisplay {
+  return state.settings?.thinkingDisplay ?? 'orb';
+}
+
 function messageEl(m: Message): HTMLElement {
   const el = document.createElement('article');
   el.className = `message ${m.role}`;
   el.innerHTML =
     m.role === 'assistant'
-      ? `<div class="meta caps muted">${starburst(12, 'accent')}<span class="ink">Democritus</span><span class="who"></span><span class="num"></span></div>` +
-        `<details class="thinking" hidden><summary><span class="thinking-label"></span></summary><div class="thinking-body md"></div></details>` +
-        `<div class="body md"></div><div class="error-box" hidden></div><div class="footer"></div>`
+      ? `<div class="orb-slot" hidden></div><div class="reply-card">` +
+        `<div class="reply-meta"><span class="model-tag"></span></div>` +
+        `<p class="think-live" hidden>Working it out… <span class="think-count"></span></p>` +
+        `<details class="thinking" hidden><summary><span class="chev">${icons.chevronRight}</span><span class="thinking-label"></span></summary><div class="thinking-body md"></div></details>` +
+        `<div class="body md"></div><div class="error-box" hidden></div><div class="footer"></div></div>`
       : `<div class="bubble"><div class="body md"></div></div>`;
   updateMessageEl(el, m);
   return el;
+}
+
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+
+/** The thinking section's button text. */
+function thinkingLabel(details: HTMLDetailsElement, m: Message): string {
+  const g = state.generation?.message === m ? state.generation : null;
+  const stillThinking = m.status === 'streaming' && !m.content.trim();
+  if (stillThinking) return thinkingDisplay() === 'orb' ? 'Show thoughts' : 'Thinking…';
+  const ms = g?.thinkStart != null ? (g.thinkEnd ?? performance.now()) - g.thinkStart : m.stats?.thinkingMs;
+  const thoughts = g ? g.thoughts : m.stats?.thoughts;
+  if (ms == null || !thoughts) return details.open ? 'Thought process' : 'Show thoughts';
+  const secs = Math.max(1, Math.round(ms / 1000));
+  return `Thought for ${plural(secs, 'second')} · ${plural(thoughts, 'thought')}${details.open ? '' : ', hidden'}`;
 }
 
 function updateMessageEl(el: HTMLElement, m: Message) {
@@ -718,30 +808,49 @@ function updateMessageEl(el: HTMLElement, m: Message) {
     return;
   }
 
-  el.querySelector('.who')!.textContent = `· ${m.model || 'assistant'}`;
-  el.querySelector('.num')!.textContent = m.id > 0 ? `N° ${String(m.id).padStart(3, '0')}` : '';
+  el.querySelector('.model-tag')!.textContent = m.model || 'assistant';
   const streaming = m.status === 'streaming';
   const content = m.content.replace(/^\s+/, '');
   const reasoning = m.reasoning.trim();
+  const mode = thinkingDisplay();
+  const g = state.generation?.message === m ? state.generation : null;
+  const thinkingNow = streaming && reasoning !== '' && content === '';
+
+  // The orb sits beside the reply only while it is being generated.
+  const slot = el.querySelector<HTMLElement>('.orb-slot')!;
+  const orb = streaming && g?.orb ? g.orb : null;
+  slot.hidden = !orb;
+  if (orb && orb.el.parentElement !== slot) slot.replaceChildren(orb.el);
+  if (!orb && slot.firstChild) slot.replaceChildren();
+
+  const live = el.querySelector<HTMLElement>('.think-live')!;
+  live.hidden = !(thinkingNow && mode !== 'thoughts');
+  if (!live.hidden) el.querySelector('.think-count')!.textContent = `${plural(g?.thoughts ?? 0, 'thought')} so far`;
 
   const thinking = el.querySelector<HTMLDetailsElement>('.thinking')!;
   thinking.hidden = reasoning === '';
   if (reasoning) {
-    const active = streaming && content === '';
-    thinking.classList.toggle('active', active);
-    el.querySelector('.thinking-label')!.textContent = active ? 'Thinking…' : 'Thought process';
+    // "Show thoughts" and "Both" open the section while the thoughts stream in.
+    if (thinkingNow && mode !== 'orb' && !thinking.dataset.autoOpened) {
+      thinking.dataset.autoOpened = '1';
+      thinking.open = true;
+    }
+    el.querySelector('.thinking-label')!.textContent = thinkingLabel(thinking, m);
     // Closed sections are rendered lazily when opened.
     if (thinking.open) renderThinking(thinking, m);
   }
 
   const waiting = streaming && !content && !reasoning;
   body.hidden = !content && !waiting;
-  const status = state.generation?.message === m ? state.generation.statusText : '';
+  const status = g?.statusText ?? '';
+  // With the orb showing the state, waiting needs no dots.
+  const dots = mode === 'thoughts' ? '<span class="typing"><i></i><i></i><i></i></span>' : '';
   body.innerHTML = content
     ? renderMarkdown(content)
     : waiting
-      ? `<span class="typing"><i></i><i></i><i></i></span>${status ? ` <span class="muted small">${escapeText(status)}</span>` : ''}`
+      ? `${dots}${status ? ` <span class="muted small">${escapeText(status)}</span>` : ''}`
       : '';
+  if (waiting && !dots && !status) body.hidden = true;
 
   const errorBox = el.querySelector<HTMLElement>('.error-box')!;
   errorBox.hidden = !m.error;
@@ -835,6 +944,8 @@ function setGenerating(on: boolean) {
   els.stop.disabled = false;
   // Switching brains mid-reply would unload the model that is answering.
   els.modelSelect.disabled = on || state.models.length === 0;
+  if (on) closeBrainMenu();
+  renderBrain();
   document.body.classList.toggle('generating', on);
 }
 
@@ -893,10 +1004,15 @@ async function send() {
     el: null,
     stopRequested: false,
     statusText: '',
+    orb: thinkingDisplay() === 'thoughts' ? null : new Orb(),
+    thoughts: 0,
+    thinkStart: null,
+    thinkEnd: null,
     finished,
     markFinished,
   };
   state.generation = g;
+  g.orb?.start();
   let started = false;
   setGenerating(true);
   await refreshConversations();
@@ -917,6 +1033,7 @@ async function send() {
     }
     toast(errorText(e), 'error');
   } finally {
+    g.orb?.stop();
     const stale = g.message.status === 'streaming';
     state.generation = null;
     setGenerating(false);
@@ -945,6 +1062,7 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       if (before && before !== m.model) els.messages.append(switchEl(before, m));
       els.messages.append(g.el);
       scrollToBottom();
+      renderHeader();
       break;
     }
     case 'status':
@@ -953,20 +1071,30 @@ function onStreamEvent(g: Generation, ev: StreamEvent) {
       break;
     case 'reasoning':
       m.reasoning += ev.text;
+      g.thoughts += 1;
+      g.thinkStart ??= performance.now();
+      g.orb?.token();
       scheduleLive();
       break;
     case 'content':
       m.content += ev.text;
+      if (ev.text.trim()) {
+        if (g.thinkStart != null) g.thinkEnd ??= performance.now();
+        g.orb?.setPhase('answering');
+      }
       scheduleLive();
       break;
     case 'reclassify':
       m.reasoning += m.content;
       m.content = '';
+      g.thinkEnd = null;
+      g.orb?.setPhase('thinking');
       scheduleLive();
       break;
     case 'done': {
       Object.assign(m, ev.message);
       g.statusText = '';
+      g.orb?.stop();
       const note = document.querySelector(`.brain-switch[data-for="${m.id}"] .handoff-note`);
       if (note) note.textContent = handoffText(m.stats?.context);
       if (g.el?.isConnected) {
@@ -1076,6 +1204,7 @@ function openSettings() {
     ...state.models.filter((m) => !m.id.includes('embedding')).map((m) => new Option(m.id, m.id)),
   );
   els.setHelper.value = s.memoryHelperModel;
+  els.setThinking.value = s.thinkingDisplay;
   void api.appPaths().then((p) => (els.setHome.placeholder = p.home));
   els.settingsError.hidden = true;
   els.settingsDialog.showModal();
@@ -1116,6 +1245,7 @@ async function saveSettings(e: SubmitEvent) {
     autoStartServer: els.setAutostart.checked,
     homeDir: els.setHome.value.trim(),
     memoryHelperModel: els.setHelper.value,
+    thinkingDisplay: els.setThinking.value as ThinkingDisplay,
   };
   try {
     state.settings = await api.saveSettings(next);
@@ -1126,6 +1256,7 @@ async function saveSettings(e: SubmitEvent) {
   }
   els.settingsDialog.close();
   toast('Settings saved');
+  if (state.settings.thinkingDisplay !== current.thinkingDisplay && !state.generation) renderMessages();
   if (state.settings.baseUrl !== current.baseUrl) {
     state.server = null;
     state.models = [];
@@ -1150,6 +1281,7 @@ async function chooseTheme(p: ThemePref) {
 function autoGrow() {
   els.input.style.height = 'auto';
   els.input.style.height = `${Math.min(els.input.scrollHeight, 240)}px`;
+  els.input.style.overflowY = els.input.scrollHeight > 240 ? 'auto' : 'hidden';
 }
 
 els.newChat.addEventListener('click', newChat);
@@ -1199,6 +1331,7 @@ els.modelSelect.addEventListener('change', async () => {
   const model = els.modelSelect.value;
   const previous = state.activeModel;
   state.activeModel = model;
+  renderBrain();
   // Free the previous brain's RAM/VRAM right away instead of waiting for the server's idle timeout.
   if (previous && previous !== model) {
     void refreshLoaded().then(async () => {
@@ -1259,10 +1392,13 @@ els.messages.addEventListener(
   'toggle',
   (e) => {
     const details = e.target;
-    if (!(details instanceof HTMLDetailsElement) || !details.open) return;
+    if (!(details instanceof HTMLDetailsElement)) return;
     const el = details.closest<HTMLElement>('.message');
     const m = el && messageOf.get(el);
-    if (m) renderThinking(details, m);
+    if (!m) return;
+    if (details.open) renderThinking(details, m);
+    const label = details.querySelector('.thinking-label');
+    if (label) label.textContent = thinkingLabel(details, m); // "hidden" comes and goes
   },
   true,
 );
@@ -1275,17 +1411,38 @@ window.addEventListener('keydown', (e) => {
       showPage('chat');
       newChat();
     }
+  } else if (e.key === 'Escape' && !els.brainMenu.hidden) {
+    e.preventDefault();
+    closeBrainMenu(true);
   } else if (e.key === 'Escape' && state.generation && !dialogOpen) {
     e.preventDefault();
     void stop();
   }
 });
+
+els.brainBtn.addEventListener('click', () => (els.brainMenu.hidden ? openBrainMenu() : closeBrainMenu(true)));
+els.brainOptions.addEventListener('click', (e) => {
+  const opt = (e.target as HTMLElement).closest<HTMLElement>('.brain-option');
+  if (opt?.dataset.model) pickBrain(opt.dataset.model);
+});
+els.brainMenu.addEventListener('keydown', (e) => {
+  const options = [...els.brainOptions.querySelectorAll<HTMLElement>('.brain-option')];
+  const i = options.indexOf(document.activeElement as HTMLElement);
+  const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+  if (step && options.length) {
+    e.preventDefault();
+    options[(i + step + options.length) % options.length].focus();
+  } else if (e.key === 'Tab') {
+    closeBrainMenu();
+  }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!els.brainMenu.hidden && !(e.target as HTMLElement).closest('.brain-picker')) closeBrainMenu();
+});
 window.addEventListener('focus', () => void pollStatus());
 
 async function init() {
-  fillOrnaments();
   initRail();
-  $<HTMLImageElement>('#band-icon').src = logoUrl;
   initThemeSwitch($('#theme-switch'), (p) => void chooseTheme(p));
   initSecurityCheck();
   initCodePage({ ensureModelFits, defaultModel: () => state.settings?.defaultModel ?? '' });
@@ -1305,18 +1462,14 @@ async function init() {
   });
   els.projectSelect.addEventListener('change', () => void chooseProject());
   void loadOperator().catch((e) => toast(`Couldn't load operator settings: ${errorText(e)}`, 'error'));
-  els.newChat.innerHTML = `${starburst(14)}<span>New conversation</span>`;
+  els.newChat.innerHTML = `<span class="plus-dot" aria-hidden="true">${icons.plus}</span><span>New conversation</span>`;
   els.newChat.title = `New chat (${modKey}+N)`;
-  els.refreshModels.innerHTML = icons.refresh;
+  els.refreshModels.innerHTML = `${icons.refresh}Refresh the model list`;
   els.openSettings.innerHTML = icons.settings;
   els.loadedBtn.innerHTML = icons.refresh;
   els.attach.innerHTML = icons.clip;
   els.send.innerHTML = icons.arrowUp;
   els.stop.innerHTML = icons.square;
-  els.composerHint.innerHTML =
-    '<span class="dots" aria-hidden="true"><span class="on"></span><span></span></span><span>Drop or attach text files</span>' +
-    '<span class="spacer"></span><span>Enter · send</span><span>Shift+Enter · new line</span><span>Esc · stop</span>';
-  void api.appPaths().then((p) => ($('#home-path').textContent = p.home)).catch(() => {});
   try {
     state.settings = await api.getSettings();
     applyTheme(state.settings.theme);

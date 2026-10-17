@@ -129,6 +129,9 @@ fn save_settings(state: State<AppState>, settings: db::Settings) -> CmdResult<db
     if !["system", "light", "dark"].contains(&s.theme.as_str()) {
         return Err("The theme must be light, dark or system.".into());
     }
+    if !db::THINKING_DISPLAYS.contains(&s.thinking_display.as_str()) {
+        return Err("Thinking display must be orb, thoughts or both.".into());
+    }
     s.server_command = s.server_command.trim().to_string();
     s.home_dir = s.home_dir.trim().to_string();
     let before = state.settings();
@@ -217,6 +220,26 @@ async fn model_fit(state: State<'_, AppState>, model: String) -> CmdResult<Optio
     Ok(Some(ollama::evaluate(&model, needed, is_estimate, memory, &loaded)))
 }
 
+/// Each model's recent speed (average tokens/s of its last five complete
+/// replies), shown in the brain picker.
+#[tauri::command]
+fn model_speeds(state: State<AppState>) -> CmdResult<HashMap<String, f64>> {
+    let conn = state.db();
+    let mut stmt = conn
+        .prepare("SELECT model, stats FROM messages WHERE role = 'assistant' AND status = 'complete' AND stats IS NOT NULL ORDER BY id DESC LIMIT 500")
+        .map_err(err)?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(err)?;
+    let mut recent: HashMap<String, Vec<f64>> = HashMap::new();
+    for (model, stats) in rows.flatten() {
+        let Some(tps) = serde_json::from_str::<Value>(&stats).ok().and_then(|v| v["tokensPerSecond"].as_f64()) else { continue };
+        let list = recent.entry(model).or_default();
+        if list.len() < 5 {
+            list.push(tps);
+        }
+    }
+    Ok(recent.into_iter().map(|(m, v)| (m, (v.iter().sum::<f64>() / v.len() as f64 * 10.0).round() / 10.0)).collect())
+}
+
 #[tauri::command]
 fn list_conversations(state: State<AppState>, query: Option<String>) -> CmdResult<Vec<db::Conversation>> {
     db::list_conversations(&state.db(), query.as_deref()).map_err(err)
@@ -283,6 +306,11 @@ struct Accumulator<'a> {
     content: String,
     reasoning: String,
     first_token: Option<Instant>,
+    /// Thinking: when the first thinking piece came, when the answer started,
+    /// and how many pieces (about one token each) there were.
+    first_thought: Option<Instant>,
+    first_answer: Option<Instant>,
+    thoughts: u64,
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     finish_reason: Option<String>,
@@ -296,6 +324,9 @@ impl<'a> Accumulator<'a> {
             content: String::new(),
             reasoning: String::new(),
             first_token: None,
+            first_thought: None,
+            first_answer: None,
+            thoughts: 0,
             prompt_tokens: None,
             completion_tokens: None,
             finish_reason: None,
@@ -328,10 +359,15 @@ impl<'a> Accumulator<'a> {
         self.first_token.get_or_insert_with(Instant::now);
         let event = match piece {
             think::Piece::Reasoning(text) => {
+                self.first_thought.get_or_insert_with(Instant::now);
+                self.thoughts += 1;
                 self.reasoning.push_str(&text);
                 StreamEvent::Reasoning { text }
             }
             think::Piece::Content(text) => {
+                if !text.trim().is_empty() {
+                    self.first_answer.get_or_insert_with(Instant::now);
+                }
                 self.content.push_str(&text);
                 StreamEvent::Content { text }
             }
@@ -365,6 +401,12 @@ impl<'a> Accumulator<'a> {
         }
         if let Some(reason) = &self.finish_reason {
             stats.insert("finishReason".into(), json!(reason));
+        }
+        if let Some(first) = self.first_thought {
+            // A reply reclassified as thinking at the end has no answer start.
+            let end = self.first_answer.filter(|a| *a > first).unwrap_or(ended);
+            stats.insert("thinkingMs".into(), json!(end.duration_since(first).as_millis() as u64));
+            stats.insert("thoughts".into(), json!(self.thoughts));
         }
         Value::Object(stats)
     }
@@ -648,6 +690,7 @@ fn main() {
             unload_model,
             memory_info,
             model_fit,
+            model_speeds,
             list_conversations,
             create_conversation,
             rename_conversation,

@@ -63,7 +63,12 @@ pub struct Settings {
     pub theme: String,
     /// Context window for the coding agent (file contents need more room than chat).
     pub agent_context_tokens: u32,
+    /// How a reply shows its thinking: "orb" (thoughts hidden, the ferrofluid
+    /// orb shows it), "thoughts" (the thinking text as it streams) or "both".
+    pub thinking_display: String,
 }
+
+pub const THINKING_DISPLAYS: &[&str] = &["orb", "thoughts", "both"];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -82,6 +87,7 @@ impl Default for Settings {
             context_tokens: 8192,
             theme: "system".into(),
             agent_context_tokens: 16384,
+            thinking_display: "orb".into(),
         }
     }
 }
@@ -489,9 +495,15 @@ mod tests {
     fn settings_round_trip_with_defaults() {
         let conn = mem();
         assert_eq!(get_settings(&conn).max_tokens, 8192);
+        assert_eq!(get_settings(&conn).thinking_display, "orb");
         let mut s = Settings::default();
         s.temperature = 0.2;
+        s.thinking_display = "both".into();
         save_settings(&conn, &s).unwrap();
         assert_eq!(get_settings(&conn).temperature, 0.2);
+        assert_eq!(get_settings(&conn).thinking_display, "both");
+        // Settings saved before the field existed read back with its default.
+        let old: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!((old.theme.as_str(), old.thinking_display.as_str()), ("dark", "orb"));
     }
 }

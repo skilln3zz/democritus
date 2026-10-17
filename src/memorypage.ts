@@ -134,7 +134,7 @@ async function openFile(path: string) {
   currentPath = path;
   const f = overview?.files.find((x) => x.path === path);
   $('#mem-file-title').textContent = f?.title ?? path;
-  $('#mem-file-path').textContent = path.toUpperCase();
+  $('#mem-file-path').textContent = path;
   const text = $<HTMLTextAreaElement>('#mem-text');
   text.value = loadedText;
   text.readOnly = path === 'index.md';

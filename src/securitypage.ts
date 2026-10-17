@@ -47,7 +47,7 @@ async function run() {
     running = false;
     checkedOnce = true;
     btn.disabled = false;
-    btn.textContent = 'Check again';
+    btn.textContent = 'Run again';
   }
 }
 
@@ -124,7 +124,7 @@ export function initSecurityCheck() {
     if (b?.dataset.fix) void applyFix(b.dataset.fix, b);
   });
   // The firewall query takes a few seconds, so run it once per session
-  // automatically; "Check again" refreshes.
+  // automatically; "Run again" refreshes.
   onShow('operator', () => {
     if (!checkedOnce) void run();
   });

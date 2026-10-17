@@ -6,7 +6,6 @@ import { diffLines } from './diff';
 import { icons } from './icons';
 import { renderMarkdown } from './markdown';
 import { getOperator, onOperatorChange } from './operatorpage';
-import { sparkle, starburst } from './ornaments';
 import { currentPage, onShow } from './pages';
 import { $, errorText, escapeText, toast } from './ui';
 
@@ -68,8 +67,9 @@ function nearBottom(): boolean {
   return l.scrollHeight - l.scrollTop - l.clientHeight < 160;
 }
 
-function setStatus(text: string) {
+function setStatus(text: string, state: 'idle' | 'running' | 'waiting' = running ? 'running' : 'idle') {
   $('#code-status').textContent = text;
+  $('#code-status-pill').dataset.state = state;
 }
 
 function setRunning(on: boolean) {
@@ -125,7 +125,7 @@ function renderChanged() {
 
 function emptyLog() {
   log().innerHTML =
-    `<div class="empty paper-card code-empty">${starburst(28, 'accent')}<h2 class="display-title">Hand Democritus a coding task</h2>` +
+    `<div class="empty code-empty"><span class="code-empty-icon">${icons.code}</span><h2 class="section-title">Hand Democritus a coding task</h2>` +
     `<p class="muted">Pick a project folder on the left, choose a brain (a <span class="mono">coder</span> model works best), and describe the change. ` +
     `Democritus reads what it needs, then proposes each edit as a diff. Nothing is written until you press <strong>Apply</strong>.</p>` +
     `<p class="small muted">It can't run commands: when a build or tests are needed, it tells you which command to run.</p></div>`;
@@ -144,9 +144,10 @@ function newCard(step: number): StepCard {
   const el = document.createElement('article');
   el.className = 'message assistant code-step';
   el.innerHTML =
-    `<div class="meta caps muted">${starburst(12, 'accent')}<span class="ink">Democritus</span><span>· ${escapeText(modelSelect().value)}</span><span class="num">Step ${step}</span></div>` +
-    `<details class="thinking" hidden><summary><span class="thinking-label">Thinking…</span></summary><div class="thinking-body"></div></details>` +
-    `<div class="body md" hidden></div><ul class="tool-list"></ul>`;
+    `<div class="reply-card"><div class="reply-meta"><span class="model-tag"></span><span class="label step-no">Step ${step}</span></div>` +
+    `<details class="thinking" hidden><summary><span class="chev">${icons.chevronRight}</span><span class="thinking-label">Thinking…</span></summary><div class="thinking-body"></div></details>` +
+    `<div class="body md" hidden></div><ul class="tool-list"></ul></div>`;
+  el.querySelector('.model-tag')!.textContent = modelSelect().value;
   append(el);
   return { el, thinking: '', content: '' };
 }
@@ -236,18 +237,19 @@ function approvalCard(approvalId: string, callId: string, edit: PlannedEdit) {
   approvalCards.set(approvalId, el);
   append(el);
   el.querySelector<HTMLButtonElement>('[data-act="apply"]')?.focus({ preventScroll: true });
-  setStatus('Waiting for your OK');
+  setStatus('Waiting for your OK', 'waiting');
   if (currentPage() !== 'code') toast(`The coding agent wants to change ${edit.path}. Open Code to review it.`);
 }
 
 function doneLine(ev: Extract<AgentEvent, { type: 'done' }>) {
   const el = document.createElement('div');
   el.className = 'brain-switch code-done';
+  el.dataset.status = ev.status;
   el.setAttribute('role', 'separator');
   const label =
     ev.status === 'complete' ? 'Task finished' : ev.status === 'stopped' ? 'Stopped' : ev.status === 'limit' ? 'Paused' : 'Something went wrong';
   el.innerHTML =
-    `<div class="brain-switch-line"><span class="rule"></span>${sparkle('accent')}<span>${label} · ${ev.editsApplied} edit${ev.editsApplied === 1 ? '' : 's'} applied</span>${sparkle('accent')}<span class="rule"></span></div>` +
+    `<div class="brain-switch-line">${ev.status === 'complete' ? icons.code : icons.square}<span>${label} · <strong>${ev.editsApplied}</strong> edit${ev.editsApplied === 1 ? '' : 's'} applied</span></div>` +
     (ev.message ? `<div class="handoff-note small"></div>` : '');
   if (ev.message) el.querySelector('.handoff-note')!.textContent = ev.message;
   append(el);

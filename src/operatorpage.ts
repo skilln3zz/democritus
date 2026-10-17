@@ -95,17 +95,19 @@ function renderLockdownButton(o: OperatorSettings) {
   btn.setAttribute('aria-pressed', String(o.lockdown));
   btn.querySelector('.rail-icon')!.innerHTML = o.lockdown ? icons.lock : icons.unlock;
   btn.querySelector('.lockdown-label')!.textContent = o.lockdown ? 'Locked' : 'Lockdown';
+  btn.setAttribute('aria-label', o.lockdown ? 'Lockdown is on' : 'Lockdown');
   btn.title = o.lockdown ? 'Lockdown is ON. Click to turn it off.' : 'Lockdown: block all internet access and pause learning';
   $('#lockdown-banner').hidden = !o.lockdown;
-  // The Settings & safety band inverts while locked.
+  // The big lock goes from raised to pressed in while locked.
   $('#op-band').classList.toggle('locked', o.lockdown);
-  $('#op-band-title').textContent = o.lockdown ? 'LOCKED' : 'LOCKDOWN';
+  $('#op-band-title').textContent = o.lockdown ? 'Locked down' : 'Lockdown is off';
   $('#op-band-text').textContent = o.lockdown
-    ? 'Internet blocked, learning paused. Chat still works.'
-    : 'One switch blocks all internet access and pauses learning.';
+    ? 'All network access is blocked and learning is paused. Chat still works.'
+    : 'Press the lock to block all network access and pause learning instantly.';
   const big = $<HTMLButtonElement>('#op-lock-btn');
-  big.textContent = o.lockdown ? 'LIFT LOCKDOWN' : 'LOCK DOWN';
+  big.innerHTML = o.lockdown ? icons.lock : icons.unlock;
   big.setAttribute('aria-pressed', String(o.lockdown));
+  big.setAttribute('aria-label', o.lockdown ? 'Lift lockdown' : 'Lock down');
 }
 
 /** The newest activity-log lines, beside the permissions. */
